@@ -1,15 +1,11 @@
 package main
 
 import (
-	"context"
 	"math"
 	"math/rand/v2"
 	"slices"
 	"strconv"
 	"strings"
-
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type Token = string
@@ -57,35 +53,6 @@ func internString(str string) (int, string) {
 	internedStrings = append(internedStrings, str)
 	internedStringsMap[str] = id
 	return id, str
-}
-
-func MakeSequenceMapFromMessages() (SequenceMap, bool) {
-	ctx := context.Background()
-	sequenceMap := make(SequenceMap)
-	cursor, err := MessageCollection.Find(
-		ctx,
-		bson.M{},
-		options.Find().SetBatchSize(16<<20).SetProjection(bson.M{"_id": 0, "Content": 1}))
-	if err != nil {
-		Error("failed to query all messages from collection:", err)
-		return nil, false
-	}
-	defer cursor.Close(ctx)
-
-	batchChannel := make(chan []Message)
-	go ConsumeCursorToChannel(cursor, batchChannel)
-
-	for batch := range batchChannel {
-		for _, msg := range batch {
-			if msg.Content != "" {
-				ConsumeMessage(&sequenceMap, msg.Content, nil)
-			}
-		}
-
-		Info("done with batch of length:", len(batch))
-	}
-
-	return sequenceMap, true
 }
 
 func ConsumeMessage(sequenceMap *SequenceMap, text string, outToks *[]int) {

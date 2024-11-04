@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"runtime/debug"
+)
 
 func Append2[T any](slice *[]T, elems ...T) {
 	*slice = append(*slice, elems...)
@@ -18,5 +21,6 @@ func Warn(args ...any) {
 
 func Error(args ...any) {
 	args = append([]any{"[ERROR]"}, args...)
+	args = append(args, "\n"+string(debug.Stack()))
 	fmt.Println(args...)
 }

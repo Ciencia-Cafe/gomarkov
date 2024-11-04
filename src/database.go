@@ -62,7 +62,7 @@ func InitDatabase() bool {
 
 func DoneDatabase() bool {
 	if err := MongodbClient.Disconnect(context.Background()); err != nil {
-		Warn("error when disconnecting to mongodb cluster: ", err)
+		Error("error when disconnecting to mongodb cluster: ", err)
 		return false
 	}
 	return true
@@ -91,6 +91,8 @@ func ConsumeCursorToChannel[T any](cursor *mongo.Cursor, ch chan []T) {
 		}
 	}
 
-	cursor.Close(ctx)
+	if err := cursor.Close(ctx); err != nil {
+		Error("failed to close cursor after consuming it:", err)
+	}
 	close(ch)
 }

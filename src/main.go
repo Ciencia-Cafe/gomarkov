@@ -291,7 +291,9 @@ func main() {
 	}
 
 	//
+	Info("online")
 	<-signalChannel
+	Info("shutting down")
 }
 
 var commands = []*discordgo.ApplicationCommand{
