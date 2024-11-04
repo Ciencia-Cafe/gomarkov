@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"math/rand/v2"
 	"os"
 	"os/signal"
 	"runtime/debug"
@@ -90,6 +91,7 @@ func main() {
 		return
 	}
 
+	messageCount := 0
 	discord.AddHandler(func(_ *discordgo.Session, message *discordgo.MessageCreate) {
 		if !slices.Contains(allowedChannels, message.ChannelID) {
 			return
@@ -114,6 +116,27 @@ func main() {
 			AuthorId:  message.Author.ID,
 			Content:   message.Content,
 		})
+
+		messageCount += 1
+		if messageCount > 25 && 25+rand.IntN(50) < messageCount {
+			var toks []string
+			var finishedOk bool
+			for tries := 0; tries < 5; tries += 1 {
+				toks, finishedOk = GenerateTokensFromMessages(sequenceMap, messages, temp, []string{})
+				if !finishedOk {
+					continue
+				}
+				break
+			}
+			if finishedOk {
+				str := StringFromTokens(toks)
+				discord.ChannelMessageSendComplex(message.ChannelID, &discordgo.MessageSend{
+					Content:         str,
+					AllowedMentions: &discordgo.MessageAllowedMentions{},
+				})
+				messageCount = 0
+			}
+		}
 	})
 
 	discord.AddHandler(func(_ *discordgo.Session, interaction *discordgo.InteractionCreate) {
