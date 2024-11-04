@@ -64,8 +64,8 @@ func MakeSequenceMapFromMessages() (SequenceMap, bool) {
 	sequenceMap := make(SequenceMap)
 	cursor, err := MessageCollection.Find(
 		ctx,
-		bson.D{},
-		options.Find().SetBatchSize(16<<20).SetProjection(bson.D{{"_id", 0}, {"Content", 1}}))
+		bson.M{},
+		options.Find().SetBatchSize(16<<20).SetProjection(bson.M{"_id": 0, "Content": 1}))
 	if err != nil {
 		Error("failed to query all messages from collection:", err)
 		return nil, false
@@ -374,21 +374,21 @@ func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]int, temp float64, 
 	return result, toks[len(toks)-1] == INTERNED_LAST_TOKEN
 }
 
-func findBestSplitPoint(seqmap SequenceMap, toks []int) int {
-	// TODO
-	baseIndex := 0
-	maxIndex := len(toks)
-	if toks[0] == INTERNED_FIRST_TOKEN {
-		baseIndex += 1
-	}
-	if toks[len(toks)-1] == INTERNED_LAST_TOKEN {
-		maxIndex -= 1
-	}
-	if len(toks) > 3 {
-		maxIndex -= 1
-	}
-	return baseIndex + rand.IntN(maxIndex-baseIndex)
-}
+// func findBestSplitPoint(_ SequenceMap, toks []int) int {
+// 	// TODO
+// 	baseIndex := 0
+// 	maxIndex := len(toks)
+// 	if toks[0] == INTERNED_FIRST_TOKEN {
+// 		baseIndex += 1
+// 	}
+// 	if toks[len(toks)-1] == INTERNED_LAST_TOKEN {
+// 		maxIndex -= 1
+// 	}
+// 	if len(toks) > 3 {
+// 		maxIndex -= 1
+// 	}
+// 	return baseIndex + rand.IntN(maxIndex-baseIndex)
+// }
 
 func findBestSplitPoint2(seqmap SequenceMap, toks []int) int {
 	// TODO

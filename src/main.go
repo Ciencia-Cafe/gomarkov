@@ -14,7 +14,6 @@ import (
 	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	mongodbOptions "go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -46,7 +45,7 @@ func main() {
 		cursor, err := MessageCollection.Find(
 			context.TODO(),
 			bson.D{},
-			options.Find().SetBatchSize(16<<20).SetProjection(bson.D{{"_id", 0}, {"Content", 1}}))
+			mongodbOptions.Find().SetBatchSize(16<<20).SetProjection(bson.M{"_id": 0, "Content": 1}))
 		if err != nil {
 			Error("failed to query all messages from collection:", err)
 		} else {
@@ -194,8 +193,8 @@ func main() {
 
 				cursor, err := MessageCollection.Find(
 					context.TODO(),
-					bson.D{{"AuthorId", user.ID}},
-					mongodbOptions.Find().SetProjection(bson.D{{"_id", 0}, {"Content", 1}}).SetBatchSize(16<<20))
+					bson.M{"AuthorId": user.ID},
+					mongodbOptions.Find().SetProjection(bson.M{"_id": 0, "Content": 1}).SetBatchSize(16<<20))
 				if err != nil {
 					discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
 						Content: "(erro) deu pau �",
