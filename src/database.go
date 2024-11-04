@@ -17,7 +17,7 @@ var MessageCollection *mongo.Collection
 type Message struct {
 	Id        primitive.ObjectID `bson:"_id,omitempty"`
 	CreatedAt primitive.DateTime `bson:"CreatedAt"`
-	AuthorId  string             `bson:"AuthorId"`
+	AuthorId  uint64             `bson:"AuthorId"`
 	Content   string             `bson:"Content"`
 }
 
@@ -79,13 +79,13 @@ func ConsumeCursorToChannel[T any](cursor *mongo.Cursor, ch chan []T) {
 			break
 		}
 		for i := range batchSize {
-			cursor.Decode(&batch[i])
-			cursor.TryNext(ctx)
+			if cursor.TryNext(ctx) {
+				cursor.Decode(&batch[i])
+			}
 		}
 
 		// Info("sending batch of length", len(batch), "to channel")
 		ch <- batch
-
 		if !cursor.Next(ctx) {
 			break
 		}

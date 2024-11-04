@@ -113,7 +113,7 @@ func main() {
 		messages = append(messages, toks)
 		MessageCollection.InsertOne(context.Background(), Message{
 			CreatedAt: primitive.NewDateTimeFromTime(timestamp),
-			AuthorId:  message.Author.ID,
+			AuthorId:  SnowflakeToUint64(message.Author.ID),
 			Content:   message.Content,
 		})
 
@@ -217,7 +217,7 @@ func main() {
 
 				cursor, err := MessageCollection.Find(
 					context.TODO(),
-					bson.M{"AuthorId": user.ID},
+					bson.M{"AuthorId": SnowflakeToUint64(user.ID)},
 					mongodbOptions.Find().SetProjection(bson.M{"_id": 0, "Content": 1}).SetBatchSize(16<<20))
 				if err != nil {
 					discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{

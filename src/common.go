@@ -3,10 +3,20 @@ package main
 import (
 	"fmt"
 	"runtime/debug"
+	"strconv"
 )
 
 func Append2[T any](slice *[]T, elems ...T) {
 	*slice = append(*slice, elems...)
+}
+
+func SnowflakeToUint64(snowflake string) uint64 {
+	result, err := strconv.ParseUint(snowflake, 10, 64)
+	if err != nil {
+		Error(err)
+		return 0
+	}
+	return result
 }
 
 func Info(args ...any) {
