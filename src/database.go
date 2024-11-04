@@ -91,5 +91,6 @@ func ConsumeCursorToChannel[T any](cursor *mongo.Cursor, ch chan []T) {
 		}
 	}
 
+	cursor.Close(ctx)
 	close(ch)
 }

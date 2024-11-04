@@ -50,8 +50,6 @@ func main() {
 		if err != nil {
 			Error("failed to query all messages from collection:", err)
 		} else {
-			defer cursor.Close(context.TODO())
-
 			batchChannel := make(chan []Message)
 			go ConsumeCursorToChannel(cursor, batchChannel)
 
@@ -110,7 +108,9 @@ func main() {
 		}
 
 		Info("msg:", message.Content)
-		ConsumeMessage(&sequenceMap, message.Content, nil)
+		var toks []int
+		ConsumeMessage(&sequenceMap, message.Content, &toks)
+		messages = append(messages, toks)
 		MessageCollection.InsertOne(context.Background(), Message{
 			CreatedAt: primitive.NewDateTimeFromTime(timestamp),
 			AuthorId:  message.Author.ID,
@@ -140,6 +140,7 @@ func main() {
 	})
 
 	discord.AddHandler(func(_ *discordgo.Session, interaction *discordgo.InteractionCreate) {
+		messageCount = 0
 		options := interaction.ApplicationCommandData().Options
 
 		switch interaction.ApplicationCommandData().Name {
@@ -260,7 +261,7 @@ func main() {
 				}
 
 				discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
-					Content:         str,
+					Content:         str + "\n-# impersonating " + user.GlobalName,
 					AllowedMentions: &discordgo.MessageAllowedMentions{},
 				})
 			}

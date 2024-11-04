@@ -54,7 +54,7 @@ func internString(str string) (int, string) {
 
 	str = strings.Clone(str)
 	id := len(internedStrings)
-	Append2(&internedStrings, str)
+	internedStrings = append(internedStrings, str)
 	internedStringsMap[str] = id
 	return id, str
 }
