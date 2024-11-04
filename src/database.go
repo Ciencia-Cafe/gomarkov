@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"strings"
 
@@ -28,7 +27,7 @@ func InitDatabase() bool {
 	connectionString := os.Getenv("MONGODB_CONNECTION_STRING")
 
 	if username == "" || password == "" || connectionString == "" {
-		fmt.Println("missing credentials to connect to mongodb cluster in .env file")
+		Error("missing credentials to connect to mongodb cluster in .env file")
 		return false
 	}
 
@@ -42,19 +41,19 @@ func InitDatabase() bool {
 	var err error
 	MongodbClient, err = mongo.Connect(context.Background(), opts)
 	if err != nil {
-		fmt.Println("error when connecting to mongodb cluster: ", err)
+		Error("error when connecting to mongodb cluster: ", err)
 		return false
 	}
 
 	MongodbDatabase = MongodbClient.Database("production")
 	if MongodbDatabase == nil {
-		fmt.Println("failed to find database")
+		Error("failed to find database")
 		return false
 	}
 
 	MessageCollection = MongodbDatabase.Collection("messages")
 	if MessageCollection == nil {
-		fmt.Println("failed to get messages collection")
+		Error("failed to get messages collection")
 		return false
 	}
 
@@ -63,7 +62,7 @@ func InitDatabase() bool {
 
 func DoneDatabase() bool {
 	if err := MongodbClient.Disconnect(context.Background()); err != nil {
-		fmt.Println("error when disconnecting to mongodb cluster: ", err)
+		Warn("error when disconnecting to mongodb cluster: ", err)
 		return false
 	}
 	return true
@@ -84,7 +83,7 @@ func ConsumeCursorToChannel[T any](cursor *mongo.Cursor, ch chan []T) {
 			cursor.TryNext(ctx)
 		}
 
-		fmt.Println("sending batch of length", len(batch), "to channel")
+		// Info("sending batch of length", len(batch), "to channel")
 		ch <- batch
 
 		if !cursor.Next(ctx) {

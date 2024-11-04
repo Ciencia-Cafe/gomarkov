@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"math/rand/v2"
 	"slices"
+	"strconv"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -21,8 +21,8 @@ type WordRelations struct {
 
 type SequenceMap = map[[SEQUENCE_SIZE]int]*WordRelations
 
-const SEQUENCE_SIZE = 3
-const MIN_SEQUENCE_SIZE = 3
+const SEQUENCE_SIZE = 6
+const MIN_SEQUENCE_SIZE = 2
 const FIRST_TOKEN = "(first token)"
 const LAST_TOKEN = "(last token)"
 const INTERNED_FIRST_TOKEN = 1
@@ -67,7 +67,7 @@ func MakeSequenceMapFromMessages() (SequenceMap, bool) {
 		bson.D{},
 		options.Find().SetBatchSize(16<<20).SetProjection(bson.D{{"_id", 0}, {"Content", 1}}))
 	if err != nil {
-		fmt.Println("failed to query all messages from collection: ", err)
+		Error("failed to query all messages from collection:", err)
 		return nil, false
 	}
 	defer cursor.Close(ctx)
@@ -82,7 +82,7 @@ func MakeSequenceMapFromMessages() (SequenceMap, bool) {
 			}
 		}
 
-		fmt.Println("done with batch of length: ", len(batch))
+		Info("done with batch of length:", len(batch))
 	}
 
 	return sequenceMap, true
@@ -242,7 +242,8 @@ func GenerateTokensFromSequenceMap(seqmap SequenceMap, temp float64, beginning [
 
 		var sequence *WordRelations
 		if len(preferredSequences) > 0 {
-			sequence = preferredSequences[randomIntTempered(0, len(preferredSequences), temp)]
+			sequence = preferredSequences[0]
+			// sequence = preferredSequences[randomIntTempered(0, len(preferredSequences), temp)]
 		} else {
 			sequence = validSequences[randomIntTempered(0, len(validSequences), temp)]
 		}
@@ -264,7 +265,7 @@ func GenerateTokensFromSequenceMap(seqmap SequenceMap, temp float64, beginning [
 }
 
 func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]int, temp float64, beginning []string) ([]string, bool) {
-	maxMessageCount := 1 + rand.IntN(3)
+	maxMessageCount := 2 + rand.IntN(2)
 	alreadySeenMessages := make([]int, 0, maxMessageCount+1)
 
 	var toks []int
@@ -278,7 +279,7 @@ func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]int, temp float64, 
 		index := rand.IntN(len(msgs))
 		msg := msgs[index]
 		alreadySeenMessages = append(alreadySeenMessages, index)
-		split := findBestSplitPoint(seqmap, msg)
+		split := findBestSplitPoint2(seqmap, msg)
 		if split != -1 {
 			msg = msg[:split]
 		}
@@ -308,13 +309,14 @@ func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]int, temp float64, 
 						break
 					}
 					splitPoint += newSplitPoint + 1
-					if !slices.Equal(tail, msg[max(splitPoint-len(tail)+1, 0):][:len(tail)]) {
+					temp := msg[max(splitPoint-len(tail)+1, 0):]
+					if !slices.Equal(tail, temp[:min(len(tail), len(temp))]) {
 						continue
 					}
 					ok = true
 				}
 
-				if ok && splitPoint+2 < len(msg) {
+				if ok && splitPoint+3 < len(msg) {
 					filtered = append(filtered, MessageIndexPair{Index: msgIndex, Message: msg[splitPoint+1:]})
 				}
 			}
@@ -330,7 +332,7 @@ func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]int, temp float64, 
 		if maxMessageCount > 1 {
 			maxMessageCount -= 1
 
-			splitPoint := findBestSplitPoint(seqmap, msg)
+			splitPoint := findBestSplitPoint2(seqmap, msg)
 			if splitPoint != -1 {
 				msg = msg[:splitPoint]
 			}
@@ -340,6 +342,18 @@ func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]int, temp float64, 
 
 		if len(toks) > 50 {
 			break
+		}
+	}
+
+	if true {
+		Info("Messages used (" + strconv.Itoa(len(alreadySeenMessages)) + ")")
+		for _, msgIndex := range alreadySeenMessages {
+			msg := msgs[msgIndex]
+			strs := make([]string, len(msg))
+			for i, tok := range msg {
+				strs[i] = internedStrings[tok]
+			}
+			Info("\t", strs)
 		}
 	}
 
@@ -374,6 +388,51 @@ func findBestSplitPoint(seqmap SequenceMap, toks []int) int {
 		maxIndex -= 1
 	}
 	return baseIndex + rand.IntN(maxIndex-baseIndex)
+}
+
+func findBestSplitPoint2(seqmap SequenceMap, toks []int) int {
+	// TODO
+	bestSplitIndex := -1
+	bestScore := 0
+	for i := range toks {
+		tail := toks[max(i-SEQUENCE_SIZE, 0):i]
+		for ; len(tail) > 0; tail = tail[1:] {
+			key := sequenceFromTokenSlice(tail)
+			if sequence, ok := seqmap[key]; ok {
+				score := 0
+
+				if len(sequence.Relations) > 1 {
+					score = sequence.Total
+				} else if _, ok := sequence.Relations[INTERNED_LAST_TOKEN]; !ok {
+					score = sequence.Total
+				}
+
+				if rel, ok := sequence.Relations[INTERNED_LAST_TOKEN]; ok && rel > sequence.Total/2 {
+					score = 0
+				}
+
+				if score > bestScore {
+					bestScore = score
+					bestSplitIndex = i + 1
+				}
+			}
+		}
+	}
+
+	if bestSplitIndex != -1 {
+		return bestSplitIndex
+	} else {
+		Warn("couldn't find best split")
+		baseIndex := 0
+		maxIndex := len(toks)
+		if toks[0] == INTERNED_FIRST_TOKEN {
+			baseIndex += 1
+		}
+		if toks[len(toks)-1] == INTERNED_LAST_TOKEN {
+			maxIndex -= 1
+		}
+		return baseIndex + (maxIndex-baseIndex)/2
+	}
 }
 
 func getAndIncrementFromSeqmap(seqmap *SequenceMap, seq [SEQUENCE_SIZE]int, tok string, amount int) {
@@ -451,6 +510,18 @@ func sequenceFromSlice(slice []string) [SEQUENCE_SIZE]int {
 	result := [SEQUENCE_SIZE]int{}
 	for i := 0; i < len(slice); i += 1 {
 		result[i], _ = internString(slice[i])
+	}
+	return result
+}
+
+func sequenceFromTokenSlice(slice []int) [SEQUENCE_SIZE]int {
+	if len(slice) > 3 {
+		slice = slice[len(slice)-3:]
+	}
+
+	result := [SEQUENCE_SIZE]int{}
+	for i := 0; i < len(slice); i += 1 {
+		result[i] = slice[i]
 	}
 	return result
 }

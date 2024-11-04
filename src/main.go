@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 	"runtime/debug"
@@ -25,7 +24,7 @@ func main() {
 	// ========================================================
 	// .env init
 	if err := godotenv.Load(); err != nil {
-		fmt.Println("error when loading dotenv: ", err)
+		Error("error when loading dotenv: ", err)
 		return
 	}
 
@@ -40,6 +39,7 @@ func main() {
 
 	temp := 0.90
 	var sequenceMap SequenceMap
+	messages := make([][]int, 0)
 
 	{
 		sequenceMap = make(SequenceMap)
@@ -48,7 +48,7 @@ func main() {
 			bson.D{},
 			options.Find().SetBatchSize(16<<20).SetProjection(bson.D{{"_id", 0}, {"Content", 1}}))
 		if err != nil {
-			fmt.Println("failed to query all messages from collection:", err)
+			Error("failed to query all messages from collection:", err)
 		} else {
 			defer cursor.Close(context.TODO())
 
@@ -58,34 +58,36 @@ func main() {
 			for batch := range batchChannel {
 				for _, msg := range batch {
 					if msg.Content != "" {
-						ConsumeMessage(&sequenceMap, msg.Content, nil)
+						var toks []int
+						ConsumeMessage(&sequenceMap, msg.Content, &toks)
+						messages = append(messages, toks)
 					}
 				}
 
-				fmt.Println("done with batch of length:", len(batch))
+				Info("done with batch of length:", len(batch))
 			}
 		}
 	}
 
-	for i := 0; i < 20; i += 1 {
-		toks, finishedOk := GenerateTokensFromSequenceMap(sequenceMap, temp, []string{})
-		// if len(toks) < randomIntTempered(6, 12, temp) {
-		// 	i -= 1
-		// 	continue
-		// }
-		str := StringFromTokens(toks)
-		if !finishedOk {
-			str += "..."
-		}
-		fmt.Println(str)
-	}
+	// for i := 0; i < 20; i += 1 {
+	// 	toks, finishedOk := GenerateTokensFromSequenceMap(sequenceMap, temp, []string{})
+	// 	// if len(toks) < randomIntTempered(6, 12, temp) {
+	// 	// 	i -= 1
+	// 	// 	continue
+	// 	// }
+	// 	str := StringFromTokens(toks)
+	// 	if !finishedOk {
+	// 		str += "..."
+	// 	}
+	// 	fmt.Println(str)
+	// }
 
 	// ========================================================
 	// Discord
 	allowedChannels := strings.Split(os.Getenv("DISCORD_ALLOWED_CHANNELS"), ",")
 	discord, err := discordgo.New("Bot " + os.Getenv("DISCORD_TOKEN"))
 	if err != nil {
-		fmt.Println("error when connecting to discord: ", err)
+		Error("error when connecting to discord: ", err)
 		return
 	}
 
@@ -102,11 +104,11 @@ func main() {
 
 		timestamp, err := discordgo.SnowflakeTimestamp(message.ID)
 		if err != nil {
-			fmt.Println("failed to get timestamp from snowflake, defaulting to time.Now()")
+			Warn("failed to get timestamp from snowflake, defaulting to time.Now()")
 			timestamp = time.Now()
 		}
 
-		fmt.Println("msg:", message.Content)
+		Info("msg:", message.Content)
 		ConsumeMessage(&sequenceMap, message.Content, nil)
 		MessageCollection.InsertOne(context.Background(), Message{
 			CreatedAt: primitive.NewDateTimeFromTime(timestamp),
@@ -124,24 +126,22 @@ func main() {
 				var toks []string
 				var finishedOk bool
 				for tries := 0; tries < 5; tries += 1 {
-					toks, finishedOk = GenerateTokensFromSequenceMap(sequenceMap, temp, []string{})
-					if len(toks) < randomIntTempered(6, 12, temp) {
-						if len(toks) <= 2 {
-							tries -= 1
-						}
+					toks, finishedOk = GenerateTokensFromMessages(sequenceMap, messages, temp, []string{})
+					if !finishedOk {
 						continue
 					}
 					break
 				}
 				str := StringFromTokens(toks)
 				if !finishedOk {
-					str += "..."
+					str += " (...nn sei mais com oq completar)"
 				}
 
 				discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
 					Type: discordgo.InteractionResponseChannelMessageWithSource,
 					Data: &discordgo.InteractionResponseData{
-						Content: str,
+						Content:         str,
+						AllowedMentions: &discordgo.MessageAllowedMentions{},
 					},
 				})
 				break
@@ -159,21 +159,22 @@ func main() {
 				var toks []string
 				var finishedOk bool
 				for tries := 0; tries < 5; tries += 1 {
-					toks, finishedOk = GenerateTokensFromSequenceMap(sequenceMap, temp, startingToks)
-					if len(toks) < randomIntTempered(6, 12, temp) {
+					toks, finishedOk = GenerateTokensFromMessages(sequenceMap, messages, temp, startingToks)
+					if !finishedOk {
 						continue
 					}
 					break
 				}
 				str := StringFromTokens(toks)
 				if !finishedOk {
-					str += "..."
+					str += " (...nn sei mais com oq completar)"
 				}
 
 				discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
 					Type: discordgo.InteractionResponseChannelMessageWithSource,
 					Data: &discordgo.InteractionResponseData{
-						Content: str,
+						Content:         str,
+						AllowedMentions: &discordgo.MessageAllowedMentions{},
 					},
 				})
 				break
@@ -226,18 +227,19 @@ func main() {
 				var finishedOk bool
 				for tries := 0; tries < 5; tries += 1 {
 					toks, finishedOk = GenerateTokensFromMessages(seqmap, messages, temp, []string{})
-					if len(toks) < randomIntTempered(6, 12, temp) {
+					if !finishedOk {
 						continue
 					}
 					break
 				}
 				str := StringFromTokens(toks)
 				if !finishedOk {
-					str += "..."
+					str += " (...nn sei mais com oq completar)"
 				}
 
 				discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
-					Content: str,
+					Content:         str,
+					AllowedMentions: &discordgo.MessageAllowedMentions{},
 				})
 			}
 		}
@@ -248,17 +250,19 @@ func main() {
 
 	err = discord.Open()
 	if err != nil {
-		fmt.Println("error opening discord session: ", err)
+		Error("error opening discord session:", err)
 		return
 	}
 	defer func() {
-		fmt.Println("closing discord session...")
-		discord.Close()
+		Info("closing discord session...")
+		if err := discord.Close(); err != nil {
+			Error("error closing discord session:", err)
+		}
 	}()
 
 	for _, command := range commands {
 		if _, err := discord.ApplicationCommandCreate(discord.State.User.ID, "", command); err != nil {
-			fmt.Println("error registering application commands: ", err)
+			Error("error registering application commands:", err)
 			return
 		}
 	}
