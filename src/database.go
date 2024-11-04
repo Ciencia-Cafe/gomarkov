@@ -72,7 +72,7 @@ func DoneDatabase() bool {
 func ConsumeCursorToChannel[T any](cursor *mongo.Cursor, ch chan []T) {
 	ctx := context.TODO()
 
-	for cursor.Next(ctx) {
+	for {
 		batchSize := cursor.RemainingBatchLength()
 		batch := make([]T, batchSize)
 
@@ -84,8 +84,12 @@ func ConsumeCursorToChannel[T any](cursor *mongo.Cursor, ch chan []T) {
 			cursor.TryNext(ctx)
 		}
 
-		fmt.Println("sending batch of length ", len(batch), " to channel")
+		fmt.Println("sending batch of length", len(batch), "to channel")
 		ch <- batch
+
+		if !cursor.Next(ctx) {
+			break
+		}
 	}
 
 	close(ch)

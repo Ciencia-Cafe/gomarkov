@@ -21,8 +21,8 @@ type WordRelations struct {
 
 type SequenceMap = map[[SEQUENCE_SIZE]int]*WordRelations
 
-const SEQUENCE_SIZE = 6
-const MIN_SEQUENCE_SIZE = 2
+const SEQUENCE_SIZE = 3
+const MIN_SEQUENCE_SIZE = 3
 const FIRST_TOKEN = "(first token)"
 const LAST_TOKEN = "(last token)"
 const INTERNED_FIRST_TOKEN = 1
@@ -78,7 +78,7 @@ func MakeSequenceMapFromMessages() (SequenceMap, bool) {
 	for batch := range batchChannel {
 		for _, msg := range batch {
 			if msg.Content != "" {
-				ConsumeMessage(&sequenceMap, msg.Content)
+				ConsumeMessage(&sequenceMap, msg.Content, nil)
 			}
 		}
 
@@ -88,7 +88,7 @@ func MakeSequenceMapFromMessages() (SequenceMap, bool) {
 	return sequenceMap, true
 }
 
-func ConsumeMessage(sequenceMap *SequenceMap, text string) {
+func ConsumeMessage(sequenceMap *SequenceMap, text string, outToks *[]int) {
 	tokensArr := [256]Token{}
 	tokens := tokensArr[:0:256]
 	tokens = TokenizeString(text, tokens, true)
@@ -119,6 +119,14 @@ func ConsumeMessage(sequenceMap *SequenceMap, text string) {
 	for len(seq) > 0 {
 		getAndIncrementFromSeqmap(sequenceMap, sequenceFromSlice(seq), LAST_TOKEN, 1)
 		seq = seq[1:]
+	}
+
+	if outToks != nil {
+		toks := make([]int, len(tokens))
+		for i, tok := range tokens {
+			toks[i], _ = internString(tok)
+		}
+		*outToks = toks
 	}
 }
 
@@ -179,8 +187,9 @@ outerLoop:
 
 func StringFromTokens(toks []string) string {
 	result := ""
+	isFirstIter := true
 
-	for i, tok := range toks {
+	for _, tok := range toks {
 		if tok == FIRST_TOKEN || tok == LAST_TOKEN {
 			continue
 		}
@@ -188,9 +197,10 @@ func StringFromTokens(toks []string) string {
 		if startsWithPunctuation(tok) != "" {
 			result += tok
 		} else {
-			if i > 0 {
+			if !isFirstIter {
 				result += " "
 			}
+			isFirstIter = false
 			result += tok
 		}
 	}
@@ -232,7 +242,7 @@ func GenerateTokensFromSequenceMap(seqmap SequenceMap, temp float64, beginning [
 
 		var sequence *WordRelations
 		if len(preferredSequences) > 0 {
-			sequence = preferredSequences[0]
+			sequence = preferredSequences[randomIntTempered(0, len(preferredSequences), temp)]
 		} else {
 			sequence = validSequences[randomIntTempered(0, len(validSequences), temp)]
 		}
@@ -251,6 +261,119 @@ func GenerateTokensFromSequenceMap(seqmap SequenceMap, temp float64, beginning [
 	}
 
 	return result, finishedGracefully
+}
+
+func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]int, temp float64, beginning []string) ([]string, bool) {
+	maxMessageCount := 1 + rand.IntN(3)
+	alreadySeenMessages := make([]int, 0, maxMessageCount+1)
+
+	var toks []int
+	if len(beginning) > 0 {
+		toks = make([]int, 1+len(beginning))
+		toks[0] = INTERNED_FIRST_TOKEN
+		for i, tok := range beginning {
+			toks[1+i], _ = internString(tok)
+		}
+	} else {
+		index := rand.IntN(len(msgs))
+		msg := msgs[index]
+		alreadySeenMessages = append(alreadySeenMessages, index)
+		split := findBestSplitPoint(seqmap, msg)
+		if split != -1 {
+			msg = msg[:split]
+		}
+		toks = slices.Clone(msg)
+	}
+
+	// generate tokens
+	for toks[len(toks)-1] != INTERNED_LAST_TOKEN {
+		tail := toks[max(len(toks)-SEQUENCE_SIZE, 0):]
+
+		type MessageIndexPair struct {
+			Index   int
+			Message []int
+		}
+		filtered := make([]MessageIndexPair, 0)
+		for ; len(filtered) == 0 && len(tail) > 0; tail = tail[1:] {
+			for msgIndex, msg := range msgs {
+				if slices.Contains(alreadySeenMessages, msgIndex) {
+					continue
+				}
+
+				splitPoint := -1
+				ok := false
+				for !ok {
+					newSplitPoint := slices.Index(msg[splitPoint+1:], tail[len(tail)-1])
+					if newSplitPoint == -1 {
+						break
+					}
+					splitPoint += newSplitPoint + 1
+					if !slices.Equal(tail, msg[max(splitPoint-len(tail)+1, 0):][:len(tail)]) {
+						continue
+					}
+					ok = true
+				}
+
+				if ok && splitPoint+2 < len(msg) {
+					filtered = append(filtered, MessageIndexPair{Index: msgIndex, Message: msg[splitPoint+1:]})
+				}
+			}
+		}
+		if len(filtered) <= 0 {
+			break
+		}
+
+		msgIndex := rand.IntN(len(filtered))
+		msg := filtered[msgIndex].Message
+		alreadySeenMessages = append(alreadySeenMessages, filtered[msgIndex].Index)
+
+		if maxMessageCount > 1 {
+			maxMessageCount -= 1
+
+			splitPoint := findBestSplitPoint(seqmap, msg)
+			if splitPoint != -1 {
+				msg = msg[:splitPoint]
+			}
+		}
+
+		toks = append(toks, msg...)
+
+		if len(toks) > 50 {
+			break
+		}
+	}
+
+	// make final slice
+	finalSize := len(toks) - 2
+	if toks[len(toks)-1] != INTERNED_LAST_TOKEN {
+		finalSize += 1
+	}
+	result := make([]string, finalSize)
+	i := 0
+	for _, tok := range toks {
+		if tok == INTERNED_FIRST_TOKEN || tok == INTERNED_LAST_TOKEN {
+			continue
+		}
+		result[i] = internedStrings[tok]
+		i += 1
+	}
+	return result, toks[len(toks)-1] == INTERNED_LAST_TOKEN
+}
+
+func findBestSplitPoint(seqmap SequenceMap, toks []int) int {
+	// TODO
+	baseIndex := 0
+	maxIndex := len(toks)
+	if toks[0] == INTERNED_FIRST_TOKEN {
+		baseIndex += 1
+	}
+	if toks[len(toks)-1] == INTERNED_LAST_TOKEN {
+		maxIndex -= 1
+	}
+	if len(toks) > 3 {
+		maxIndex -= 1
+	}
+	return baseIndex + rand.IntN(maxIndex-baseIndex)
 }
 
 func getAndIncrementFromSeqmap(seqmap *SequenceMap, seq [SEQUENCE_SIZE]int, tok string, amount int) {

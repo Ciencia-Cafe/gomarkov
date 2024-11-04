@@ -13,7 +13,10 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/joho/godotenv"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	mongodbOptions "go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func main() {
@@ -35,19 +38,41 @@ func main() {
 
 	// fmt.Println(MessageCollection.DeleteMany(context.TODO(), bson.D{{"Content", ""}}))
 
-	temp := 0.95
-	sequenceMap, ok := MakeSequenceMapFromMessages()
-	if !ok {
-		fmt.Println("failed to generate sequence map from messages")
-		return
+	temp := 0.90
+	var sequenceMap SequenceMap
+
+	{
+		sequenceMap = make(SequenceMap)
+		cursor, err := MessageCollection.Find(
+			context.TODO(),
+			bson.D{},
+			options.Find().SetBatchSize(16<<20).SetProjection(bson.D{{"_id", 0}, {"Content", 1}}))
+		if err != nil {
+			fmt.Println("failed to query all messages from collection:", err)
+		} else {
+			defer cursor.Close(context.TODO())
+
+			batchChannel := make(chan []Message)
+			go ConsumeCursorToChannel(cursor, batchChannel)
+
+			for batch := range batchChannel {
+				for _, msg := range batch {
+					if msg.Content != "" {
+						ConsumeMessage(&sequenceMap, msg.Content, nil)
+					}
+				}
+
+				fmt.Println("done with batch of length:", len(batch))
+			}
+		}
 	}
 
 	for i := 0; i < 20; i += 1 {
 		toks, finishedOk := GenerateTokensFromSequenceMap(sequenceMap, temp, []string{})
-		if len(toks) < randomIntTempered(6, 12, temp) {
-			i -= 1
-			continue
-		}
+		// if len(toks) < randomIntTempered(6, 12, temp) {
+		// 	i -= 1
+		// 	continue
+		// }
 		str := StringFromTokens(toks)
 		if !finishedOk {
 			str += "..."
@@ -71,6 +96,9 @@ func main() {
 		if message.Author.Bot {
 			return
 		}
+		if len(message.Content) <= 0 {
+			return
+		}
 
 		timestamp, err := discordgo.SnowflakeTimestamp(message.ID)
 		if err != nil {
@@ -78,8 +106,8 @@ func main() {
 			timestamp = time.Now()
 		}
 
-		fmt.Println("msg: ", message.Content)
-		ConsumeMessage(&sequenceMap, message.Content)
+		fmt.Println("msg:", message.Content)
+		ConsumeMessage(&sequenceMap, message.Content, nil)
 		MessageCollection.InsertOne(context.Background(), Message{
 			CreatedAt: primitive.NewDateTimeFromTime(timestamp),
 			AuthorId:  message.Author.ID,
@@ -150,6 +178,68 @@ func main() {
 				})
 				break
 			}
+		case "impersonate":
+			{
+				var user *discordgo.User
+				for _, option := range options {
+					if option.Name == "user" {
+						user = option.UserValue(discord)
+					}
+				}
+
+				discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+				})
+
+				cursor, err := MessageCollection.Find(
+					context.TODO(),
+					bson.D{{"AuthorId", user.ID}},
+					mongodbOptions.Find().SetProjection(bson.D{{"_id", 0}, {"Content", 1}}).SetBatchSize(16<<20))
+				if err != nil {
+					discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+						Content: "(erro) deu pau �",
+					})
+					break
+				}
+
+				batchChannel := make(chan []Message)
+				go ConsumeCursorToChannel(cursor, batchChannel)
+				seqmap := make(SequenceMap)
+				messages := make([][]int, 0)
+
+				for batch := range batchChannel {
+					for _, msg := range batch {
+						var toks []int
+						ConsumeMessage(&seqmap, msg.Content, &toks)
+						messages = append(messages, toks)
+					}
+				}
+
+				if len(messages) <= 30 {
+					discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+						Content: "(erro) tenho mts poucas msgs dessa pessoa",
+					})
+					break
+				}
+
+				var toks []string
+				var finishedOk bool
+				for tries := 0; tries < 5; tries += 1 {
+					toks, finishedOk = GenerateTokensFromMessages(seqmap, messages, temp, []string{})
+					if len(toks) < randomIntTempered(6, 12, temp) {
+						continue
+					}
+					break
+				}
+				str := StringFromTokens(toks)
+				if !finishedOk {
+					str += "..."
+				}
+
+				discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+					Content: str,
+				})
+			}
 		}
 	})
 
@@ -190,6 +280,18 @@ var commands = []*discordgo.ApplicationCommand{
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "text",
 				Description: "texto",
+				Required:    true,
+			},
+		},
+	},
+	{
+		Name:        "impersonate",
+		Description: "me diz alguém pra impersonar",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionUser,
+				Name:        "user",
+				Description: "usuário",
 				Required:    true,
 			},
 		},
