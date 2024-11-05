@@ -8,13 +8,13 @@ import (
 	"strings"
 )
 
-type Token = uint32
+type Token uint32
 
 const MAX_TOKEN = math.MaxUint32
 
 type WordRelations struct {
-	Total     int
-	Relations map[Token]int
+	Total     uint
+	Relations map[Token]uint32
 }
 
 type SequenceMap = map[[SEQUENCE_SIZE]Token]*WordRelations
@@ -228,7 +228,13 @@ func GenerateTokensFromSequenceMap(seqmap SequenceMap, temp float64, beginning [
 		}
 
 		slices.SortStableFunc(preferredSequences, func(a *WordRelations, b *WordRelations) int {
-			return b.Total - a.Total
+			if b.Total > a.Total {
+				return 1
+			}
+			if a.Total > b.Total {
+				return -1
+			}
+			return 0
 		})
 
 		var sequence *WordRelations
@@ -384,13 +390,13 @@ func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]Token, temp float64
 func findBestSplitPoint2(seqmap SequenceMap, toks []Token) int {
 	// TODO
 	bestSplitIndex := -1
-	bestScore := 0
+	bestScore := uint(0)
 	for i := range toks {
 		tail := toks[max(i-SEQUENCE_SIZE, 0):i]
 		for ; len(tail) > 0; tail = tail[1:] {
 			key := sequenceFromTokenSlice(tail)
 			if sequence, ok := seqmap[key]; ok {
-				score := 0
+				score := uint(0)
 
 				if len(sequence.Relations) > 1 {
 					score = sequence.Total
@@ -398,7 +404,7 @@ func findBestSplitPoint2(seqmap SequenceMap, toks []Token) int {
 					score = sequence.Total
 				}
 
-				if rel, ok := sequence.Relations[INTERNED_LAST_TOKEN]; ok && rel > sequence.Total/2 {
+				if rel, ok := sequence.Relations[INTERNED_LAST_TOKEN]; ok && uint(rel) > sequence.Total/2 {
 					score = 0
 				}
 
@@ -426,15 +432,15 @@ func findBestSplitPoint2(seqmap SequenceMap, toks []Token) int {
 	}
 }
 
-func getAndIncrementFromSeqmap(seqmap *SequenceMap, seq [SEQUENCE_SIZE]Token, tok string, amount int) {
+func getAndIncrementFromSeqmap(seqmap *SequenceMap, seq [SEQUENCE_SIZE]Token, tok string, amount uint32) {
 	sequenceMap := *seqmap
 
 	sequence, ok := sequenceMap[seq]
 	if !ok {
-		sequence = &WordRelations{Total: 0, Relations: make(map[Token]int)}
+		sequence = &WordRelations{Total: 0, Relations: make(map[Token]uint32)}
 		sequenceMap[seq] = sequence
 	}
-	sequence.Total += amount
+	sequence.Total += uint(amount)
 
 	tokId, _ := internString(tok)
 	relations, ok := sequence.Relations[tokId]
@@ -472,23 +478,30 @@ func randomWordFromRelations(sequence *WordRelations, temp float64) string {
 
 	type WordAmountPair struct {
 		Word   Token
-		Amount int
+		Amount uint32
 	}
 	relations := make([]WordAmountPair, 0, len(sequence.Relations))
 	for key, value := range sequence.Relations {
 		Append2(&relations, WordAmountPair{key, value})
 	}
 	slices.SortFunc(relations, func(left WordAmountPair, right WordAmountPair) int {
-		return right.Amount - left.Amount
+		if right.Amount > left.Amount {
+			return 1
+		}
+		if right.Amount < left.Amount {
+			return -1
+		}
+		return 0
 	})
 
-	amounted := randomIntTempered(0, sequence.Total, temp)
-	acc := 0
+	amounted := randomUintTempered(0, sequence.Total, temp)
+	acc := uint(0)
 	for _, value := range relations {
-		if amounted >= acc && amounted < acc+value.Amount {
+		amount := uint(value.Amount)
+		if amounted >= acc && amounted < acc+amount {
 			return internedStrings[value.Word]
 		}
-		acc += value.Amount
+		acc += amount
 	}
 	panic("what?")
 }
@@ -520,6 +533,11 @@ func sequenceFromTokenSlice(slice []Token) [SEQUENCE_SIZE]Token {
 func randomIntTempered(from int, to int, temp float64) int {
 	v := math.Pow(rand.Float64(), temp)
 	return from + int(v*float64(to-from))
+}
+
+func randomUintTempered(from uint, to uint, temp float64) uint {
+	v := math.Pow(rand.Float64(), temp)
+	return from + uint(v*float64(to-from))
 }
 
 func isWhitespace(ch uint8) bool {
