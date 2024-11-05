@@ -34,3 +34,9 @@ func Error(args ...any) {
 	args = append(args, "\n"+string(debug.Stack()))
 	fmt.Println(args...)
 }
+
+func CheckIrrelevantError(err error) {
+	if err != nil {
+		Error(err)
+	}
+}

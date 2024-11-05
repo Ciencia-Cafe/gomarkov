@@ -83,6 +83,7 @@ func main() {
 	// ========================================================
 	// Discord
 	allowedChannels := strings.Split(os.Getenv("DISCORD_ALLOWED_CHANNELS"), ",")
+	usersExceptionsToDirectResponses := strings.Split(os.Getenv("DISCORD_USERS_EXCEPTIONS_TO_DIRECT_RESPONSES"), ",")
 	discord, err := discordgo.New("Bot " + os.Getenv("DISCORD_TOKEN"))
 	if err != nil {
 		Error("error when connecting to discord: ", err)
@@ -111,11 +112,12 @@ func main() {
 		var toks []int
 		ConsumeMessage(&sequenceMap, message.Content, &toks)
 		messages = append(messages, toks)
-		MessageCollection.InsertOne(context.Background(), Message{
+		_, err = MessageCollection.InsertOne(context.Background(), Message{
 			CreatedAt: primitive.NewDateTimeFromTime(timestamp),
 			AuthorId:  SnowflakeToUint64(message.Author.ID),
 			Content:   message.Content,
 		})
+		CheckIrrelevantError(err)
 
 		messageCount += 1
 		if messageCount > 25 && 25+rand.IntN(50) < messageCount {
@@ -130,10 +132,11 @@ func main() {
 			}
 			if finishedOk {
 				str := StringFromTokens(toks)
-				discord.ChannelMessageSendComplex(message.ChannelID, &discordgo.MessageSend{
+				_, err := discord.ChannelMessageSendComplex(message.ChannelID, &discordgo.MessageSend{
 					Content:         str,
 					AllowedMentions: &discordgo.MessageAllowedMentions{},
 				})
+				CheckIrrelevantError(err)
 				messageCount = 0
 			}
 		}
@@ -142,6 +145,13 @@ func main() {
 	discord.AddHandler(func(_ *discordgo.Session, interaction *discordgo.InteractionCreate) {
 		messageCount = 0
 		options := interaction.ApplicationCommandData().Options
+		calleeUser := interaction.Interaction.Member.User
+
+		shouldSendSeparate := slices.Contains(usersExceptionsToDirectResponses, calleeUser.ID)
+		flags := discordgo.MessageFlagsEphemeral
+		if !shouldSendSeparate {
+			flags = 0
+		}
 
 		switch interaction.ApplicationCommandData().Name {
 		case "trigger":
@@ -160,22 +170,33 @@ func main() {
 					str += " (...nn sei mais com oq completar)"
 				}
 
-				discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
-					Type: discordgo.InteractionResponseChannelMessageWithSource,
-					Data: &discordgo.InteractionResponseData{
+				if shouldSendSeparate {
+					_, err = discord.ChannelMessageSendComplex(interaction.ChannelID, &discordgo.MessageSend{
 						Content:         str,
 						AllowedMentions: &discordgo.MessageAllowedMentions{},
+					})
+					CheckIrrelevantError(err)
+				}
+				err = discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Content:         str + "\n-# " + calleeUser.GlobalName + " usou /trigger",
+						AllowedMentions: &discordgo.MessageAllowedMentions{},
+						Flags:           flags,
 					},
 				})
+				CheckIrrelevantError(err)
 				break
 			}
 		case "autocomplete":
 			{
 				var startingToks []string
+				optionRawValue := ""
 				for _, option := range options {
 					if option.Name == "text" {
 						str := option.StringValue()
 						startingToks = TokenizeString(str, nil, false)
+						optionRawValue = str
 					}
 				}
 
@@ -193,13 +214,22 @@ func main() {
 					str += " (...nn sei mais com oq completar)"
 				}
 
-				discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+				if shouldSendSeparate {
+					_, err = discord.ChannelMessageSendComplex(interaction.ChannelID, &discordgo.MessageSend{
+						Content:         str + "\n-# " + calleeUser.GlobalName + " usou /autocomplete " + optionRawValue,
+						AllowedMentions: &discordgo.MessageAllowedMentions{},
+					})
+					CheckIrrelevantError(err)
+				}
+				err = discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
 					Type: discordgo.InteractionResponseChannelMessageWithSource,
 					Data: &discordgo.InteractionResponseData{
 						Content:         str,
 						AllowedMentions: &discordgo.MessageAllowedMentions{},
+						Flags:           flags,
 					},
 				})
+				CheckIrrelevantError(err)
 				break
 			}
 		case "impersonate":
@@ -211,18 +241,23 @@ func main() {
 					}
 				}
 
-				discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+				err = discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
 					Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Flags: flags,
+					},
 				})
+				CheckIrrelevantError(err)
 
 				cursor, err := MessageCollection.Find(
 					context.TODO(),
 					bson.M{"AuthorId": SnowflakeToUint64(user.ID)},
 					mongodbOptions.Find().SetProjection(bson.M{"_id": 0, "Content": 1}).SetBatchSize(16<<20))
 				if err != nil {
-					discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+					_, err = discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
 						Content: "(erro) deu pau �",
 					})
+					CheckIrrelevantError(err)
 					break
 				}
 
@@ -240,9 +275,10 @@ func main() {
 				}
 
 				if len(messages) <= 30 {
-					discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+					_, err = discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
 						Content: "(erro) tenho mts poucas msgs dessa pessoa",
 					})
+					CheckIrrelevantError(err)
 					break
 				}
 
@@ -260,10 +296,19 @@ func main() {
 					str += " (...nn sei mais com oq completar)"
 				}
 
-				discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+				if shouldSendSeparate {
+					_, err = discord.ChannelMessageSendComplex(interaction.ChannelID, &discordgo.MessageSend{
+						Content:         str + "\n-# " + calleeUser.GlobalName + " usou /impersonate " + user.Mention(),
+						AllowedMentions: &discordgo.MessageAllowedMentions{},
+					})
+					CheckIrrelevantError(err)
+				}
+				_, err = discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
 					Content:         str + "\n-# impersonating " + user.GlobalName,
 					AllowedMentions: &discordgo.MessageAllowedMentions{},
+					Flags:           flags,
 				})
+				CheckIrrelevantError(err)
 			}
 		}
 	})
