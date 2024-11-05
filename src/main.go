@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	mongodbOptions "go.mongodb.org/mongo-driver/mongo/options"
 )
+
+const DEFAULT_TEMP = 0.9
 
 func main() {
 	debug.SetMemoryLimit(512 << 20)
@@ -35,18 +38,37 @@ func main() {
 	}
 	defer DoneDatabase()
 
+	updateGuildContexts()
+
+	// Info(GuildCollection.InsertOne(context.TODO(), &Guild{
+	// 	GuildId:                uint64(739580670480744490),
+	// 	ScrapingChannelsIds:    []uint64{739582072980504628},
+	// 	InteractionChannelsIds: []uint64{739582072980504628},
+	// }))
+	// Info(MessageCollection.UpdateMany(context.Background(), bson.M{}, bson.M{
+	// 	"$set": bson.M{
+	// 		"GuildId": uint64(739580670480744490),
+	// 	},
+	// }))
+	// Info(GuildCollection.InsertOne(context.TODO(), &Guild{
+	// 	GuildId:                uint64(507550989629521922),
+	// 	ScrapingChannelsIds:    []uint64{553933292542361601, 507550989629521924, 835316057014927421, 671327942420201492},
+	// 	InteractionChannelsIds: []uint64{671327942420201492},
+	// }))
+
 	// fmt.Println(MessageCollection.DeleteMany(context.TODO(), bson.D{{"Content", ""}}))
 
-	temp := 0.90
-	var sequenceMap SequenceMap
-	messages := make([][]int, 0)
-
 	{
-		sequenceMap = make(SequenceMap)
 		cursor, err := MessageCollection.Find(
 			context.TODO(),
 			bson.D{},
-			mongodbOptions.Find().SetBatchSize(16<<20).SetProjection(bson.M{"_id": 0, "Content": 1}))
+			mongodbOptions.Find().SetBatchSize(16<<20).SetProjection(
+				bson.M{
+					"_id":     0,
+					"GuildId": 1,
+					"Content": 1,
+				},
+			))
 		if err != nil {
 			Error("failed to query all messages from collection:", err)
 		} else {
@@ -55,17 +77,39 @@ func main() {
 
 			for batch := range batchChannel {
 				for _, msg := range batch {
-					if msg.Content != "" {
-						var toks []int
-						ConsumeMessage(&sequenceMap, msg.Content, &toks)
-						messages = append(messages, toks)
+					if msg.Content == "" {
+						continue
 					}
+					guildContext, ok := guildContexts[msg.GuildId]
+					if !ok {
+						continue
+					}
+
+					var toks []int
+					ConsumeMessage(&guildContext.GlobalDict, msg.Content, &toks)
+					guildContext.AllMessages = append(guildContext.AllMessages, toks)
+					guildContexts[msg.GuildId] = guildContext
 				}
 
 				Info("done with batch of length:", len(batch))
 			}
 		}
 	}
+
+	guildsUpdateTicker := time.NewTicker(30 * time.Second)
+	guildsUpdaterChannel := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-guildsUpdateTicker.C:
+				updateGuildContexts()
+			case <-guildsUpdaterChannel:
+				guildsUpdateTicker.Stop()
+				return
+			}
+		}
+	}()
+	defer close(guildsUpdaterChannel)
 
 	// for i := 0; i < 20; i += 1 {
 	// 	toks, finishedOk := GenerateTokensFromSequenceMap(sequenceMap, temp, []string{})
@@ -82,7 +126,6 @@ func main() {
 
 	// ========================================================
 	// Discord
-	allowedChannels := strings.Split(os.Getenv("DISCORD_ALLOWED_CHANNELS"), ",")
 	usersExceptionsToDirectResponses := strings.Split(os.Getenv("DISCORD_USERS_EXCEPTIONS_TO_DIRECT_RESPONSES"), ",")
 	discord, err := discordgo.New("Bot " + os.Getenv("DISCORD_TOKEN"))
 	if err != nil {
@@ -90,15 +133,30 @@ func main() {
 		return
 	}
 
-	messageCount := 0
+	perChannelMessageCounter := map[uint64]int32{}
 	discord.AddHandler(func(_ *discordgo.Session, message *discordgo.MessageCreate) {
-		if !slices.Contains(allowedChannels, message.ChannelID) {
-			return
-		}
 		if message.Author.Bot {
 			return
 		}
 		if len(message.Content) <= 0 {
+			return
+		}
+
+		guildContextsLock.Lock()
+		defer guildContextsLock.Unlock()
+
+		guildId := SnowflakeToUint64(message.GuildID)
+		channelId := SnowflakeToUint64(message.ChannelID)
+		userId := SnowflakeToUint64(message.Author.ID)
+
+		guildContext, ok := guildContexts[guildId]
+		if !ok {
+			return
+		}
+		defer func() {
+			guildContexts[guildContext.GuildData.GuildId] = guildContext
+		}()
+		if !slices.Contains(guildContext.GuildData.ScrapingChannelsIds, channelId) {
 			return
 		}
 
@@ -110,40 +168,115 @@ func main() {
 
 		Info("msg:", message.Content)
 		var toks []int
-		ConsumeMessage(&sequenceMap, message.Content, &toks)
-		messages = append(messages, toks)
+		ConsumeMessage(&guildContext.GlobalDict, message.Content, &toks)
+		guildContext.AllMessages = append(guildContext.AllMessages, toks)
 		_, err = MessageCollection.InsertOne(context.Background(), Message{
 			CreatedAt: primitive.NewDateTimeFromTime(timestamp),
-			AuthorId:  SnowflakeToUint64(message.Author.ID),
+			GuildId:   guildId,
+			ChannelId: channelId,
+			AuthorId:  userId,
 			Content:   message.Content,
 		})
 		CheckIrrelevantError(err)
 
-		messageCount += 1
-		if messageCount > 25 && 25+rand.IntN(50) < messageCount {
-			var toks []string
-			var finishedOk bool
-			for tries := 0; tries < 5; tries += 1 {
-				toks, finishedOk = GenerateTokensFromMessages(sequenceMap, messages, temp, []string{})
-				if !finishedOk {
-					continue
-				}
-				break
-			}
-			if finishedOk {
-				str := StringFromTokens(toks)
-				_, err := discord.ChannelMessageSendComplex(message.ChannelID, &discordgo.MessageSend{
-					Content:         str,
-					AllowedMentions: &discordgo.MessageAllowedMentions{},
-				})
-				CheckIrrelevantError(err)
+		if slices.Contains(guildContext.GuildData.InteractionChannelsIds, channelId) {
+			var messageCount int32
+			messageCount, ok = perChannelMessageCounter[channelId]
+			if !ok {
 				messageCount = 0
+			}
+			messageCount += 1
+			perChannelMessageCounter[channelId] = messageCount
+
+			minCount := guildContext.GuildData.MinMessageCountToSendMessage
+			maxCount := guildContext.GuildData.MaxMessageCountToSendMessage
+			if minCount == 0 {
+				minCount = 25
+			}
+			if maxCount == 0 {
+				maxCount = minCount + 50
+			}
+
+			if messageCount >= minCount && minCount+rand.Int32N(maxCount-minCount) < messageCount {
+				var toks []string
+				var finishedOk bool
+				for tries := 0; tries < 5; tries += 1 {
+					toks, finishedOk = GenerateTokensFromMessages(guildContext.GlobalDict, guildContext.AllMessages, DEFAULT_TEMP, []string{})
+					if !finishedOk {
+						continue
+					}
+					break
+				}
+				if finishedOk {
+					str := StringFromTokens(toks)
+					_, err := discord.ChannelMessageSendComplex(message.ChannelID, &discordgo.MessageSend{
+						Content:         str,
+						AllowedMentions: &discordgo.MessageAllowedMentions{},
+					})
+					CheckIrrelevantError(err)
+					perChannelMessageCounter[channelId] = 0
+				}
 			}
 		}
 	})
 
 	discord.AddHandler(func(_ *discordgo.Session, interaction *discordgo.InteractionCreate) {
-		messageCount = 0
+		if interaction.Interaction.GuildID == "" {
+			err := discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content:         "só posso ser usado em servidores específicos",
+					AllowedMentions: &discordgo.MessageAllowedMentions{},
+					Flags:           discordgo.MessageFlagsEphemeral,
+				},
+			})
+			CheckIrrelevantError(err)
+			return
+		}
+		if interaction.Interaction.ChannelID == "" {
+			err := discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content:         "só posso ser usado em servidores específicos",
+					AllowedMentions: &discordgo.MessageAllowedMentions{},
+					Flags:           discordgo.MessageFlagsEphemeral,
+				},
+			})
+			CheckIrrelevantError(err)
+			return
+		}
+
+		guildContextsLock.Lock()
+		defer guildContextsLock.Unlock()
+
+		guildId := SnowflakeToUint64(interaction.Interaction.GuildID)
+		channelId := SnowflakeToUint64(interaction.Interaction.ChannelID)
+		guildContext, ok := guildContexts[guildId]
+		if !ok {
+			err := discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content:         "só posso ser usado em servidores específicos",
+					AllowedMentions: &discordgo.MessageAllowedMentions{},
+					Flags:           discordgo.MessageFlagsEphemeral,
+				},
+			})
+			CheckIrrelevantError(err)
+			return
+		}
+		if !slices.Contains(guildContext.GuildData.InteractionChannelsIds, channelId) {
+			err := discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content:         "só posso ser usado em canais específicos",
+					AllowedMentions: &discordgo.MessageAllowedMentions{},
+					Flags:           discordgo.MessageFlagsEphemeral,
+				},
+			})
+			CheckIrrelevantError(err)
+			return
+		}
+
 		options := interaction.ApplicationCommandData().Options
 		calleeUser := interaction.Interaction.Member.User
 
@@ -159,7 +292,7 @@ func main() {
 				var toks []string
 				var finishedOk bool
 				for tries := 0; tries < 5; tries += 1 {
-					toks, finishedOk = GenerateTokensFromMessages(sequenceMap, messages, temp, []string{})
+					toks, finishedOk = GenerateTokensFromMessages(guildContext.GlobalDict, guildContext.AllMessages, DEFAULT_TEMP, []string{})
 					if !finishedOk {
 						continue
 					}
@@ -203,7 +336,7 @@ func main() {
 				var toks []string
 				var finishedOk bool
 				for tries := 0; tries < 5; tries += 1 {
-					toks, finishedOk = GenerateTokensFromMessages(sequenceMap, messages, temp, startingToks)
+					toks, finishedOk = GenerateTokensFromMessages(guildContext.GlobalDict, guildContext.AllMessages, DEFAULT_TEMP, startingToks)
 					if !finishedOk {
 						continue
 					}
@@ -251,7 +384,10 @@ func main() {
 
 				cursor, err := MessageCollection.Find(
 					context.TODO(),
-					bson.M{"AuthorId": SnowflakeToUint64(user.ID)},
+					bson.M{
+						"GuildId":  guildId,
+						"AuthorId": SnowflakeToUint64(user.ID),
+					},
 					mongodbOptions.Find().SetProjection(bson.M{"_id": 0, "Content": 1}).SetBatchSize(16<<20))
 				if err != nil {
 					_, err = discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
@@ -285,7 +421,7 @@ func main() {
 				var toks []string
 				var finishedOk bool
 				for tries := 0; tries < 5; tries += 1 {
-					toks, finishedOk = GenerateTokensFromMessages(seqmap, messages, temp, []string{})
+					toks, finishedOk = GenerateTokensFromMessages(seqmap, messages, DEFAULT_TEMP, []string{})
 					if !finishedOk {
 						continue
 					}
@@ -370,4 +506,49 @@ var commands = []*discordgo.ApplicationCommand{
 			},
 		},
 	},
+}
+
+type GuildContext struct {
+	GuildData   Guild
+	GlobalDict  SequenceMap
+	AllMessages [][]int
+}
+
+var guildContexts = map[uint64]GuildContext{}
+var guildContextsLock = sync.Mutex{}
+
+func updateGuildContexts() {
+	cursor, err := GuildCollection.Find(context.Background(), bson.M{})
+	if err != nil {
+		Error("failed to update guilds contexts:", err)
+		return
+	}
+
+	batchChannel := make(chan []Guild)
+	go ConsumeCursorToChannel(cursor, batchChannel)
+
+	allFoundGuilds := []Guild{}
+	for batch := range batchChannel {
+		allFoundGuilds = append(allFoundGuilds, batch...)
+	}
+
+	guildContextsLock.Lock()
+	defer guildContextsLock.Unlock()
+
+	newGuildContexts := map[uint64]GuildContext{}
+	for _, guild := range allFoundGuilds {
+		prev, ok := guildContexts[guild.GuildId]
+		if ok {
+			prev.GuildData = guild
+			newGuildContexts[guild.GuildId] = prev
+		} else {
+			newGuildContexts[guild.GuildId] = GuildContext{
+				GuildData:   guild,
+				GlobalDict:  SequenceMap{},
+				AllMessages: [][]int{},
+			}
+		}
+	}
+
+	guildContexts = newGuildContexts
 }

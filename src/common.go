@@ -37,6 +37,6 @@ func Error(args ...any) {
 
 func CheckIrrelevantError(err error) {
 	if err != nil {
-		Error(err)
+		Error("CheckIrrelevantError:", err)
 	}
 }

@@ -13,12 +13,24 @@ import (
 var MongodbClient *mongo.Client
 var MongodbDatabase *mongo.Database
 var MessageCollection *mongo.Collection
+var GuildCollection *mongo.Collection
 
 type Message struct {
 	Id        primitive.ObjectID `bson:"_id,omitempty"`
 	CreatedAt primitive.DateTime `bson:"CreatedAt"`
+	ChannelId uint64             `bson:"ChannelId"`
+	GuildId   uint64             `bson:"GuildId"`
 	AuthorId  uint64             `bson:"AuthorId"`
 	Content   string             `bson:"Content"`
+}
+
+type Guild struct {
+	Id                           primitive.ObjectID `bson:"_id,omitempty"`
+	GuildId                      uint64             `bson:"GuildId"`
+	ScrapingChannelsIds          []uint64           `bson:"ScrapingChannelsIds"`
+	InteractionChannelsIds       []uint64           `bson:"InteractionChannelsIds"`
+	MinMessageCountToSendMessage int32              `bson:"MinMessageCountToSendMessage"`
+	MaxMessageCountToSendMessage int32              `bson:"MaxMessageCountToSendMessage"`
 }
 
 func InitDatabase() bool {
@@ -52,8 +64,9 @@ func InitDatabase() bool {
 	}
 
 	MessageCollection = MongodbDatabase.Collection("messages")
-	if MessageCollection == nil {
-		Error("failed to get messages collection")
+	GuildCollection = MongodbDatabase.Collection("guilds")
+	if MessageCollection == nil || GuildCollection == nil {
+		Error("failed to get collections")
 		return false
 	}
 
