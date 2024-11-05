@@ -17,7 +17,7 @@ type WordRelations struct {
 	Relations map[Token]uint32
 }
 
-type SequenceMap = map[[SEQUENCE_SIZE]Token]*WordRelations
+type SequenceMap = map[[SEQUENCE_SIZE]Token]WordRelations
 
 const SEQUENCE_SIZE = 6
 const MIN_SEQUENCE_SIZE = 2
@@ -206,8 +206,8 @@ func GenerateTokensFromSequenceMap(seqmap SequenceMap, temp float64, beginning [
 
 	for len(result) < 50 && result[len(result)-1] != LAST_TOKEN {
 		tail := result[max(len(result)-SEQUENCE_SIZE, 0):]
-		var validSequences = make([]*WordRelations, 0, 6)
-		var preferredSequences = make([]*WordRelations, 0, 6)
+		var validSequences = make([]WordRelations, 0, 6)
+		var preferredSequences = make([]WordRelations, 0, 6)
 
 		for len(tail) > 0 {
 			key := sequenceFromSlice(tail)
@@ -227,7 +227,7 @@ func GenerateTokensFromSequenceMap(seqmap SequenceMap, temp float64, beginning [
 			break
 		}
 
-		slices.SortStableFunc(preferredSequences, func(a *WordRelations, b *WordRelations) int {
+		slices.SortStableFunc(preferredSequences, func(a WordRelations, b WordRelations) int {
 			if b.Total > a.Total {
 				return 1
 			}
@@ -237,7 +237,7 @@ func GenerateTokensFromSequenceMap(seqmap SequenceMap, temp float64, beginning [
 			return 0
 		})
 
-		var sequence *WordRelations
+		var sequence WordRelations
 		if len(preferredSequences) > 0 {
 			sequence = preferredSequences[0]
 			// sequence = preferredSequences[randomIntTempered(0, len(preferredSequences), temp)]
@@ -437,8 +437,7 @@ func getAndIncrementFromSeqmap(seqmap *SequenceMap, seq [SEQUENCE_SIZE]Token, to
 
 	sequence, ok := sequenceMap[seq]
 	if !ok {
-		sequence = &WordRelations{Total: 0, Relations: make(map[Token]uint32)}
-		sequenceMap[seq] = sequence
+		sequence = WordRelations{Total: 0, Relations: make(map[Token]uint32)}
 	}
 	sequence.Total += uint(amount)
 
@@ -450,6 +449,7 @@ func getAndIncrementFromSeqmap(seqmap *SequenceMap, seq [SEQUENCE_SIZE]Token, to
 		sequence.Relations[tokId] = relations + 1
 	}
 
+	sequenceMap[seq] = sequence
 	*seqmap = sequenceMap
 }
 
@@ -466,7 +466,7 @@ func startsWithPunctuation(str string) string {
 	return ""
 }
 
-func randomWordFromRelations(sequence *WordRelations, temp float64) string {
+func randomWordFromRelations(sequence WordRelations, temp float64) string {
 	if len(sequence.Relations) == 0 {
 		return ""
 	}
