@@ -85,7 +85,7 @@ func main() {
 						continue
 					}
 
-					var toks []int
+					var toks []Token
 					ConsumeMessage(&guildContext.GlobalDict, msg.Content, &toks)
 					guildContext.AllMessages = append(guildContext.AllMessages, toks)
 					guildContexts[msg.GuildId] = guildContext
@@ -142,8 +142,8 @@ func main() {
 			return
 		}
 
-		guildContextsLock.Lock()
-		defer guildContextsLock.Unlock()
+		guildContextsLock.RLock()
+		defer guildContextsLock.RUnlock()
 
 		guildId := SnowflakeToUint64(message.GuildID)
 		channelId := SnowflakeToUint64(message.ChannelID)
@@ -167,7 +167,7 @@ func main() {
 		}
 
 		Info("msg:", message.Content)
-		var toks []int
+		var toks []Token
 		ConsumeMessage(&guildContext.GlobalDict, message.Content, &toks)
 		guildContext.AllMessages = append(guildContext.AllMessages, toks)
 		_, err = MessageCollection.InsertOne(context.Background(), Message{
@@ -246,12 +246,11 @@ func main() {
 			return
 		}
 
-		guildContextsLock.Lock()
-		defer guildContextsLock.Unlock()
-
 		guildId := SnowflakeToUint64(interaction.Interaction.GuildID)
 		channelId := SnowflakeToUint64(interaction.Interaction.ChannelID)
+		guildContextsLock.RLock()
 		guildContext, ok := guildContexts[guildId]
+		guildContextsLock.RUnlock()
 		if !ok {
 			err := discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -400,11 +399,11 @@ func main() {
 				batchChannel := make(chan []Message)
 				go ConsumeCursorToChannel(cursor, batchChannel)
 				seqmap := make(SequenceMap)
-				messages := make([][]int, 0)
+				messages := make([][]Token, 0)
 
 				for batch := range batchChannel {
 					for _, msg := range batch {
-						var toks []int
+						var toks []Token
 						ConsumeMessage(&seqmap, msg.Content, &toks)
 						messages = append(messages, toks)
 					}
@@ -473,6 +472,12 @@ func main() {
 
 	//
 	Info("online")
+	// bytes, err := json.Marshal(internedStrings)
+	// if err == nil {
+	// 	Info(os.WriteFile("./temp.json", bytes, 0))
+	// } else {
+	// 	Warn(err)
+	// }
 	<-signalChannel
 	Info("shutting down")
 }
@@ -511,11 +516,11 @@ var commands = []*discordgo.ApplicationCommand{
 type GuildContext struct {
 	GuildData   Guild
 	GlobalDict  SequenceMap
-	AllMessages [][]int
+	AllMessages [][]Token
 }
 
 var guildContexts = map[uint64]GuildContext{}
-var guildContextsLock = sync.Mutex{}
+var guildContextsLock = sync.RWMutex{}
 
 func updateGuildContexts() {
 	cursor, err := GuildCollection.Find(context.Background(), bson.M{})
@@ -545,7 +550,7 @@ func updateGuildContexts() {
 			newGuildContexts[guild.GuildId] = GuildContext{
 				GuildData:   guild,
 				GlobalDict:  SequenceMap{},
-				AllMessages: [][]int{},
+				AllMessages: [][]Token{},
 			}
 		}
 	}

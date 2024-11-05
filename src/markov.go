@@ -8,14 +8,16 @@ import (
 	"strings"
 )
 
-type Token = string
+type Token = uint32
+
+const MAX_TOKEN = math.MaxUint32
 
 type WordRelations struct {
 	Total     int
-	Relations map[int]int
+	Relations map[Token]int
 }
 
-type SequenceMap = map[[SEQUENCE_SIZE]int]*WordRelations
+type SequenceMap = map[[SEQUENCE_SIZE]Token]*WordRelations
 
 const SEQUENCE_SIZE = 6
 const MIN_SEQUENCE_SIZE = 2
@@ -25,38 +27,51 @@ const INTERNED_FIRST_TOKEN = 1
 const INTERNED_LAST_TOKEN = 2
 
 var PUNCTUATIONS = [...]string{
-	// "...",
 	":",
 	// ";",
+	"...",
+	"..",
 	".",
 	",",
 	"?",
+	"??",
+	"!?",
+	"?!",
 	"!",
-	// "(",
-	// ")",
+	"!!",
+	"!!!",
+	"(",
+	")",
 	// "\n",
 	// "\"",
 	// "\t",
 	"```",
 }
 
-var internedStrings = []string{"", FIRST_TOKEN, LAST_TOKEN}
-var internedStringsMap = map[string]int{"": 0, FIRST_TOKEN: INTERNED_FIRST_TOKEN, LAST_TOKEN: INTERNED_LAST_TOKEN}
+var PUNCT_BINDING_RIGHT = [...]string{
+	"(",
+}
 
-func internString(str string) (int, string) {
+var internedStrings = []string{"", FIRST_TOKEN, LAST_TOKEN}
+var internedStringsMap = map[string]Token{"": 0, FIRST_TOKEN: INTERNED_FIRST_TOKEN, LAST_TOKEN: INTERNED_LAST_TOKEN}
+
+func internString(str string) (Token, string) {
 	if id, ok := internedStringsMap[str]; ok {
 		return id, internedStrings[id]
 	}
 
 	str = strings.Clone(str)
 	id := len(internedStrings)
+	if id > MAX_TOKEN {
+		panic("interned strings map size would grow beyond MAX_TOKEN (" + strconv.Itoa(MAX_TOKEN) + ")")
+	}
 	internedStrings = append(internedStrings, str)
-	internedStringsMap[str] = id
-	return id, str
+	internedStringsMap[str] = Token(id)
+	return Token(id), str
 }
 
-func ConsumeMessage(sequenceMap *SequenceMap, text string, outToks *[]int) {
-	tokensArr := [256]Token{}
+func ConsumeMessage(sequenceMap *SequenceMap, text string, outToks *[]Token) {
+	tokensArr := [256]string{}
 	tokens := tokensArr[:0:256]
 	tokens = TokenizeString(text, tokens, true)
 
@@ -89,7 +104,7 @@ func ConsumeMessage(sequenceMap *SequenceMap, text string, outToks *[]int) {
 	}
 
 	if outToks != nil {
-		toks := make([]int, len(tokens))
+		toks := make([]Token, len(tokens))
 		for i, tok := range tokens {
 			toks[i], _ = internString(tok)
 		}
@@ -97,7 +112,7 @@ func ConsumeMessage(sequenceMap *SequenceMap, text string, outToks *[]int) {
 	}
 }
 
-func TokenizeString(text string, tokens []Token, includeFirstAndLastToken bool) []Token {
+func TokenizeString(text string, tokens []string, includeFirstAndLastToken bool) []string {
 	if includeFirstAndLastToken {
 		Append2(&tokens, FIRST_TOKEN)
 	}
@@ -154,20 +169,29 @@ outerLoop:
 
 func StringFromTokens(toks []string) string {
 	result := ""
-	isFirstIter := true
+	shouldAddSpace := false
 
 	for _, tok := range toks {
 		if tok == FIRST_TOKEN || tok == LAST_TOKEN {
 			continue
 		}
 
-		if startsWithPunctuation(tok) != "" {
-			result += tok
+		if slices.Contains(PUNCTUATIONS[:], tok) {
+			if slices.Contains(PUNCT_BINDING_RIGHT[:], tok) {
+				if shouldAddSpace {
+					result += " "
+					shouldAddSpace = false
+				}
+				result += tok
+			} else {
+				result += tok
+				shouldAddSpace = true
+			}
 		} else {
-			if !isFirstIter {
+			if shouldAddSpace {
 				result += " "
 			}
-			isFirstIter = false
+			shouldAddSpace = true
 			result += tok
 		}
 	}
@@ -231,13 +255,13 @@ func GenerateTokensFromSequenceMap(seqmap SequenceMap, temp float64, beginning [
 	return result, finishedGracefully
 }
 
-func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]int, temp float64, beginning []string) ([]string, bool) {
+func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]Token, temp float64, beginning []string) ([]string, bool) {
 	maxMessageCount := 2 + rand.IntN(2)
 	alreadySeenMessages := make([]int, 0, maxMessageCount+1)
 
-	var toks []int
+	var toks []Token
 	if len(beginning) > 0 {
-		toks = make([]int, 1+len(beginning))
+		toks = make([]Token, 1+len(beginning))
 		toks[0] = INTERNED_FIRST_TOKEN
 		for i, tok := range beginning {
 			toks[1+i], _ = internString(tok)
@@ -259,7 +283,7 @@ func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]int, temp float64, 
 
 		type MessageIndexPair struct {
 			Index   int
-			Message []int
+			Message []Token
 		}
 		filtered := make([]MessageIndexPair, 0)
 		for ; len(filtered) == 0 && len(tail) > 0; tail = tail[1:] {
@@ -357,7 +381,7 @@ func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]int, temp float64, 
 // 	return baseIndex + rand.IntN(maxIndex-baseIndex)
 // }
 
-func findBestSplitPoint2(seqmap SequenceMap, toks []int) int {
+func findBestSplitPoint2(seqmap SequenceMap, toks []Token) int {
 	// TODO
 	bestSplitIndex := -1
 	bestScore := 0
@@ -402,12 +426,12 @@ func findBestSplitPoint2(seqmap SequenceMap, toks []int) int {
 	}
 }
 
-func getAndIncrementFromSeqmap(seqmap *SequenceMap, seq [SEQUENCE_SIZE]int, tok string, amount int) {
+func getAndIncrementFromSeqmap(seqmap *SequenceMap, seq [SEQUENCE_SIZE]Token, tok string, amount int) {
 	sequenceMap := *seqmap
 
 	sequence, ok := sequenceMap[seq]
 	if !ok {
-		sequence = &WordRelations{Total: 0, Relations: make(map[int]int)}
+		sequence = &WordRelations{Total: 0, Relations: make(map[Token]int)}
 		sequenceMap[seq] = sequence
 	}
 	sequence.Total += amount
@@ -428,7 +452,7 @@ func startsWithPunctuation(str string) string {
 		if strings.HasPrefix(str, punct) {
 			if len(str) <= len(punct) {
 				return punct
-			} else if isWhitespace(str[len(punct)]) {
+			} else if isWhitespace(str[len(punct)]) != slices.Contains(PUNCT_BINDING_RIGHT[:], punct) {
 				return punct
 			}
 		}
@@ -447,7 +471,7 @@ func randomWordFromRelations(sequence *WordRelations, temp float64) string {
 	}
 
 	type WordAmountPair struct {
-		Word   int
+		Word   Token
 		Amount int
 	}
 	relations := make([]WordAmountPair, 0, len(sequence.Relations))
@@ -469,24 +493,24 @@ func randomWordFromRelations(sequence *WordRelations, temp float64) string {
 	panic("what?")
 }
 
-func sequenceFromSlice(slice []string) [SEQUENCE_SIZE]int {
+func sequenceFromSlice(slice []string) [SEQUENCE_SIZE]Token {
 	if len(slice) > 3 {
 		slice = slice[len(slice)-3:]
 	}
 
-	result := [SEQUENCE_SIZE]int{}
+	result := [SEQUENCE_SIZE]Token{}
 	for i := 0; i < len(slice); i += 1 {
 		result[i], _ = internString(slice[i])
 	}
 	return result
 }
 
-func sequenceFromTokenSlice(slice []int) [SEQUENCE_SIZE]int {
+func sequenceFromTokenSlice(slice []Token) [SEQUENCE_SIZE]Token {
 	if len(slice) > 3 {
 		slice = slice[len(slice)-3:]
 	}
 
-	result := [SEQUENCE_SIZE]int{}
+	result := [SEQUENCE_SIZE]Token{}
 	for i := 0; i < len(slice); i += 1 {
 		result[i] = slice[i]
 	}
