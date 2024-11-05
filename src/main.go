@@ -111,19 +111,6 @@ func main() {
 	}()
 	defer close(guildsUpdaterChannel)
 
-	// for i := 0; i < 20; i += 1 {
-	// 	toks, finishedOk := GenerateTokensFromSequenceMap(sequenceMap, temp, []string{})
-	// 	// if len(toks) < randomIntTempered(6, 12, temp) {
-	// 	// 	i -= 1
-	// 	// 	continue
-	// 	// }
-	// 	str := StringFromTokens(toks)
-	// 	if !finishedOk {
-	// 		str += "..."
-	// 	}
-	// 	fmt.Println(str)
-	// }
-
 	// ========================================================
 	// Discord
 	usersExceptionsToDirectResponses := strings.Split(os.Getenv("DISCORD_USERS_EXCEPTIONS_TO_DIRECT_RESPONSES"), ",")
@@ -201,7 +188,7 @@ func main() {
 				var toks []string
 				var finishedOk bool
 				for tries := 0; tries < 5; tries += 1 {
-					toks, finishedOk = GenerateTokensFromMessages(guildContext.GlobalDict, guildContext.AllMessages, DEFAULT_TEMP, []string{})
+					toks, finishedOk = GenerateTokensFromMessages(guildContext.GlobalDict, guildContext.AllMessages, DEFAULT_TEMP, []Token{})
 					if !finishedOk {
 						continue
 					}
@@ -291,7 +278,7 @@ func main() {
 				var toks []string
 				var finishedOk bool
 				for tries := 0; tries < 5; tries += 1 {
-					toks, finishedOk = GenerateTokensFromMessages(guildContext.GlobalDict, guildContext.AllMessages, DEFAULT_TEMP, []string{})
+					toks, finishedOk = GenerateTokensFromMessages(guildContext.GlobalDict, guildContext.AllMessages, DEFAULT_TEMP, []Token{})
 					if !finishedOk {
 						continue
 					}
@@ -322,7 +309,7 @@ func main() {
 			}
 		case "autocomplete":
 			{
-				var startingToks []string
+				var startingToks []Token
 				optionRawValue := ""
 				for _, option := range options {
 					if option.Name == "text" {
@@ -420,7 +407,7 @@ func main() {
 				var toks []string
 				var finishedOk bool
 				for tries := 0; tries < 5; tries += 1 {
-					toks, finishedOk = GenerateTokensFromMessages(seqmap, messages, DEFAULT_TEMP, []string{})
+					toks, finishedOk = GenerateTokensFromMessages(seqmap, messages, DEFAULT_TEMP, []Token{})
 					if !finishedOk {
 						continue
 					}

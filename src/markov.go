@@ -17,9 +17,9 @@ type WordRelations struct {
 	Relations map[Token]uint32
 }
 
-type SequenceMap = map[[SEQUENCE_SIZE]Token]WordRelations
+type SequenceMap map[[SEQUENCE_SIZE]Token]WordRelations
 
-const SEQUENCE_SIZE = 6
+const SEQUENCE_SIZE = 5
 const MIN_SEQUENCE_SIZE = 2
 const FIRST_TOKEN = "(first token)"
 const LAST_TOKEN = "(last token)"
@@ -52,12 +52,23 @@ var PUNCT_BINDING_RIGHT = [...]string{
 	"(",
 }
 
-var internedStrings = []string{"", FIRST_TOKEN, LAST_TOKEN}
-var internedStringsMap = map[string]Token{"": 0, FIRST_TOKEN: INTERNED_FIRST_TOKEN, LAST_TOKEN: INTERNED_LAST_TOKEN}
+var internedStrings []string
+var internedStringsMap map[string]Token
 
-func internString(str string) (Token, string) {
+func init() {
+	internedStrings = make([]string, 3, 200_000)
+	internedStrings[0] = ""
+	internedStrings[1] = FIRST_TOKEN
+	internedStrings[2] = LAST_TOKEN
+	internedStringsMap = make(map[string]Token, 200_000)
+	for i, v := range internedStrings {
+		internedStringsMap[v] = Token(i)
+	}
+}
+
+func internString(str string) Token {
 	if id, ok := internedStringsMap[str]; ok {
-		return id, internedStrings[id]
+		return id
 	}
 
 	str = strings.Clone(str)
@@ -67,23 +78,23 @@ func internString(str string) (Token, string) {
 	}
 	internedStrings = append(internedStrings, str)
 	internedStringsMap[str] = Token(id)
-	return Token(id), str
+	return Token(id)
 }
 
 func ConsumeMessage(sequenceMap *SequenceMap, text string, outToks *[]Token) {
-	tokensArr := [256]string{}
+	tokensArr := [256]Token{}
 	tokens := tokensArr[:0:256]
 	tokens = TokenizeString(text, tokens, true)
 
-	seqArr := [SEQUENCE_SIZE]string{}
+	seqArr := [SEQUENCE_SIZE]Token{}
 	seq := seqArr[:0:3]
 
 	for _, tok := range tokens {
 		if len(seq) < MIN_SEQUENCE_SIZE {
-			getAndIncrementFromSeqmap(sequenceMap, sequenceFromSlice(seq), tok, 1)
+			getAndIncrementFromSeqmap(sequenceMap, sequenceFromTokenSlice(seq), tok, 1)
 		} else {
 			for i := len(seq) - 1; i >= MIN_SEQUENCE_SIZE; i -= 1 {
-				getAndIncrementFromSeqmap(sequenceMap, sequenceFromSlice(seq[i:]), tok, 1)
+				getAndIncrementFromSeqmap(sequenceMap, sequenceFromTokenSlice(seq[i:]), tok, 1)
 			}
 		}
 		// getAndIncrementFromSeqmap(&sequenceMap, sequenceFromSlice(seq), tok, 1)
@@ -99,22 +110,18 @@ func ConsumeMessage(sequenceMap *SequenceMap, text string, outToks *[]Token) {
 
 	seq = seq[:len(seq)-1]
 	for len(seq) > 0 {
-		getAndIncrementFromSeqmap(sequenceMap, sequenceFromSlice(seq), LAST_TOKEN, 1)
+		getAndIncrementFromSeqmap(sequenceMap, sequenceFromTokenSlice(seq), INTERNED_LAST_TOKEN, 1)
 		seq = seq[1:]
 	}
 
 	if outToks != nil {
-		toks := make([]Token, len(tokens))
-		for i, tok := range tokens {
-			toks[i], _ = internString(tok)
-		}
-		*outToks = toks
+		*outToks = append([]Token{}, tokens[1:len(tokens)-1]...)
 	}
 }
 
-func TokenizeString(text string, tokens []string, includeFirstAndLastToken bool) []string {
+func TokenizeString(text string, tokens []Token, includeFirstAndLastToken bool) []Token {
 	if includeFirstAndLastToken {
-		Append2(&tokens, FIRST_TOKEN)
+		Append2(&tokens, INTERNED_FIRST_TOKEN)
 	}
 	head := 0
 
@@ -131,7 +138,7 @@ outerLoop:
 		if text[head] == '<' {
 			end := strings.IndexByte(text[head+1:], '>')
 			if end != -1 {
-				Append2(&tokens, text[head:][:end+2])
+				Append2(&tokens, internString(text[head:][:end+2]))
 				head += end + 2
 				continue
 			}
@@ -140,14 +147,14 @@ outerLoop:
 		if strings.HasPrefix(subtext, "```") {
 			end := strings.Index(text[head+3:], "```")
 			if end != -1 {
-				Append2(&tokens, text[head:][:end+6])
+				Append2(&tokens, internString(text[head:][:end+6]))
 				head += end + 6
 				continue
 			}
 		}
 
 		if punct := startsWithPunctuation(text[head:]); punct != "" {
-			Append2(&tokens, punct)
+			Append2(&tokens, internString(punct))
 			head += len(punct)
 			continue
 		}
@@ -159,10 +166,10 @@ outerLoop:
 				break
 			}
 		}
-		Append2(&tokens, text[start:head])
+		Append2(&tokens, internString(text[start:head]))
 	}
 	if includeFirstAndLastToken {
-		Append2(&tokens, LAST_TOKEN)
+		Append2(&tokens, INTERNED_LAST_TOKEN)
 	}
 	return tokens
 }
@@ -199,69 +206,7 @@ func StringFromTokens(toks []string) string {
 	return result
 }
 
-func GenerateTokensFromSequenceMap(seqmap SequenceMap, temp float64, beginning []string) ([]string, bool) {
-	result := make([]string, 1, 1+len(beginning))
-	result[0] = FIRST_TOKEN
-	Append2(&result, beginning...)
-
-	for len(result) < 50 && result[len(result)-1] != LAST_TOKEN {
-		tail := result[max(len(result)-SEQUENCE_SIZE, 0):]
-		var validSequences = make([]WordRelations, 0, 6)
-		var preferredSequences = make([]WordRelations, 0, 6)
-
-		for len(tail) > 0 {
-			key := sequenceFromSlice(tail)
-			sequence, ok := seqmap[key]
-			if ok {
-				Append2(&validSequences, sequence)
-				if len(sequence.Relations) > 1 {
-					Append2(&preferredSequences, sequence)
-				} else if _, ok := sequence.Relations[INTERNED_LAST_TOKEN]; !ok {
-					Append2(&preferredSequences, sequence)
-				}
-			}
-			tail = tail[1:]
-		}
-
-		if len(validSequences) == 0 {
-			break
-		}
-
-		slices.SortStableFunc(preferredSequences, func(a WordRelations, b WordRelations) int {
-			if b.Total > a.Total {
-				return 1
-			}
-			if a.Total > b.Total {
-				return -1
-			}
-			return 0
-		})
-
-		var sequence WordRelations
-		if len(preferredSequences) > 0 {
-			sequence = preferredSequences[0]
-			// sequence = preferredSequences[randomIntTempered(0, len(preferredSequences), temp)]
-		} else {
-			sequence = validSequences[randomIntTempered(0, len(validSequences), temp)]
-		}
-
-		randomWord := randomWordFromRelations(sequence, temp)
-		if randomWord == "" {
-			break
-		}
-		Append2(&result, randomWord)
-	}
-
-	finishedGracefully := true
-	if result[len(result)-1] != LAST_TOKEN {
-		Append2(&result, LAST_TOKEN)
-		finishedGracefully = false
-	}
-
-	return result, finishedGracefully
-}
-
-func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]Token, temp float64, beginning []string) ([]string, bool) {
+func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]Token, temp float64, beginning []Token) ([]string, bool) {
 	maxMessageCount := 2 + rand.IntN(2)
 	alreadySeenMessages := make([]int, 0, maxMessageCount+1)
 
@@ -270,7 +215,7 @@ func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]Token, temp float64
 		toks = make([]Token, 1+len(beginning))
 		toks[0] = INTERNED_FIRST_TOKEN
 		for i, tok := range beginning {
-			toks[1+i], _ = internString(tok)
+			toks[1+i] = tok
 		}
 	} else {
 		index := rand.IntN(len(msgs))
@@ -280,7 +225,7 @@ func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]Token, temp float64
 		if split != -1 {
 			msg = msg[:split]
 		}
-		toks = slices.Clone(msg)
+		toks = append([]Token{INTERNED_FIRST_TOKEN}, msg...)
 	}
 
 	// generate tokens
@@ -326,16 +271,21 @@ func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]Token, temp float64
 		msg := filtered[msgIndex].Message
 		alreadySeenMessages = append(alreadySeenMessages, filtered[msgIndex].Index)
 
+		splitted := false
 		if maxMessageCount > 1 {
 			maxMessageCount -= 1
 
 			splitPoint := findBestSplitPoint2(seqmap, msg)
 			if splitPoint != -1 {
 				msg = msg[:splitPoint]
+				splitted = true
 			}
 		}
 
 		toks = append(toks, msg...)
+		if !splitted {
+			toks = append(toks, INTERNED_LAST_TOKEN)
+		}
 
 		if len(toks) > 50 {
 			break
@@ -432,22 +382,16 @@ func findBestSplitPoint2(seqmap SequenceMap, toks []Token) int {
 	}
 }
 
-func getAndIncrementFromSeqmap(seqmap *SequenceMap, seq [SEQUENCE_SIZE]Token, tok string, amount uint32) {
+func getAndIncrementFromSeqmap(seqmap *SequenceMap, seq [SEQUENCE_SIZE]Token, tok Token, amount uint32) {
 	sequenceMap := *seqmap
 
 	sequence, ok := sequenceMap[seq]
 	if !ok {
 		sequence = WordRelations{Total: 0, Relations: make(map[Token]uint32)}
 	}
-	sequence.Total += uint(amount)
 
-	tokId, _ := internString(tok)
-	relations, ok := sequence.Relations[tokId]
-	if !ok {
-		sequence.Relations[tokId] = 1
-	} else {
-		sequence.Relations[tokId] = relations + 1
-	}
+	sequence.Total += uint(amount)
+	sequence.Relations[tok] += amount
 
 	sequenceMap[seq] = sequence
 	*seqmap = sequenceMap
@@ -466,58 +410,6 @@ func startsWithPunctuation(str string) string {
 	return ""
 }
 
-func randomWordFromRelations(sequence WordRelations, temp float64) string {
-	if len(sequence.Relations) == 0 {
-		return ""
-	}
-	if len(sequence.Relations) == 1 {
-		for key := range sequence.Relations {
-			return internedStrings[key]
-		}
-	}
-
-	type WordAmountPair struct {
-		Word   Token
-		Amount uint32
-	}
-	relations := make([]WordAmountPair, 0, len(sequence.Relations))
-	for key, value := range sequence.Relations {
-		Append2(&relations, WordAmountPair{key, value})
-	}
-	slices.SortFunc(relations, func(left WordAmountPair, right WordAmountPair) int {
-		if right.Amount > left.Amount {
-			return 1
-		}
-		if right.Amount < left.Amount {
-			return -1
-		}
-		return 0
-	})
-
-	amounted := randomUintTempered(0, sequence.Total, temp)
-	acc := uint(0)
-	for _, value := range relations {
-		amount := uint(value.Amount)
-		if amounted >= acc && amounted < acc+amount {
-			return internedStrings[value.Word]
-		}
-		acc += amount
-	}
-	panic("what?")
-}
-
-func sequenceFromSlice(slice []string) [SEQUENCE_SIZE]Token {
-	if len(slice) > 3 {
-		slice = slice[len(slice)-3:]
-	}
-
-	result := [SEQUENCE_SIZE]Token{}
-	for i := 0; i < len(slice); i += 1 {
-		result[i], _ = internString(slice[i])
-	}
-	return result
-}
-
 func sequenceFromTokenSlice(slice []Token) [SEQUENCE_SIZE]Token {
 	if len(slice) > 3 {
 		slice = slice[len(slice)-3:]
@@ -530,15 +422,15 @@ func sequenceFromTokenSlice(slice []Token) [SEQUENCE_SIZE]Token {
 	return result
 }
 
-func randomIntTempered(from int, to int, temp float64) int {
-	v := math.Pow(rand.Float64(), temp)
-	return from + int(v*float64(to-from))
-}
+// func randomIntTempered(from int, to int, temp float64) int {
+// 	v := math.Pow(rand.Float64(), temp)
+// 	return from + int(v*float64(to-from))
+// }
 
-func randomUintTempered(from uint, to uint, temp float64) uint {
-	v := math.Pow(rand.Float64(), temp)
-	return from + uint(v*float64(to-from))
-}
+// func randomUintTempered(from uint, to uint, temp float64) uint {
+// 	v := math.Pow(rand.Float64(), temp)
+// 	return from + uint(v*float64(to-from))
+// }
 
 func isWhitespace(ch uint8) bool {
 	return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r'
