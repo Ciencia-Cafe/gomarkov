@@ -338,7 +338,6 @@ func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]Token, temp float64
 // }
 
 func findBestSplitPoint2(seqmap SequenceMap, toks []Token) int {
-	// TODO
 	bestSplitIndex := -1
 	bestScore := uint(0)
 	for i := range toks {
@@ -358,7 +357,7 @@ func findBestSplitPoint2(seqmap SequenceMap, toks []Token) int {
 					score = 0
 				}
 
-				if score > bestScore {
+				if score >= bestScore {
 					bestScore = score
 					bestSplitIndex = i + 1
 				}
