@@ -20,7 +20,7 @@ type WordRelations struct {
 type SequenceMap map[[SEQUENCE_SIZE]Token]WordRelations
 
 const SEQUENCE_SIZE = 6
-const MIN_SEQUENCE_SIZE = 1
+const MIN_SEQUENCE_SIZE = 2
 const FIRST_TOKEN = "(first token)"
 const LAST_TOKEN = "(last token)"
 const INTERNED_FIRST_TOKEN = 1
@@ -33,13 +33,13 @@ var PUNCTUATIONS = [...]string{
 	"..",
 	".",
 	",",
-	"?",
 	"??",
-	"!?",
 	"?!",
-	"!",
-	"!!",
+	"?",
 	"!!!",
+	"!?",
+	"!!",
+	"!",
 	"(",
 	")",
 	// "\n",
@@ -174,24 +174,25 @@ outerLoop:
 	return tokens
 }
 
-func StringFromTokens(toks []string) string {
+func StringFromTokens(toks []Token) string {
 	result := ""
 	shouldAddSpace := false
 
 	for _, tok := range toks {
-		if tok == FIRST_TOKEN || tok == LAST_TOKEN {
+		if tok == INTERNED_FIRST_TOKEN || tok == INTERNED_LAST_TOKEN {
 			continue
 		}
 
-		if slices.Contains(PUNCTUATIONS[:], tok) {
-			if slices.Contains(PUNCT_BINDING_RIGHT[:], tok) {
+		strtok := internedStrings[tok]
+		if slices.Contains(PUNCTUATIONS[:], strtok) {
+			if slices.Contains(PUNCT_BINDING_RIGHT[:], strtok) {
 				if shouldAddSpace {
 					result += " "
 					shouldAddSpace = false
 				}
-				result += tok
+				result += strtok
 			} else {
-				result += tok
+				result += strtok
 				shouldAddSpace = true
 			}
 		} else {
@@ -199,15 +200,15 @@ func StringFromTokens(toks []string) string {
 				result += " "
 			}
 			shouldAddSpace = true
-			result += tok
+			result += strtok
 		}
 	}
 
 	return result
 }
 
-func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]Token, temp float64, beginning []Token) ([]string, bool) {
-	maxMessageCount := 2 + rand.IntN(2)
+func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]Token, temp float64, beginning []Token) ([]Token, []int) {
+	maxMessageCount := 1 + rand.IntN(2)
 	alreadySeenMessages := make([]int, 0, maxMessageCount+1)
 
 	var toks []Token
@@ -292,33 +293,7 @@ func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]Token, temp float64
 		}
 	}
 
-	if true {
-		Info("Messages used (" + strconv.Itoa(len(alreadySeenMessages)) + ")")
-		for _, msgIndex := range alreadySeenMessages {
-			msg := msgs[msgIndex]
-			strs := make([]string, len(msg))
-			for i, tok := range msg {
-				strs[i] = internedStrings[tok]
-			}
-			Info("\t", strs)
-		}
-	}
-
-	// make final slice
-	finalSize := len(toks) - 2
-	if toks[len(toks)-1] != INTERNED_LAST_TOKEN {
-		finalSize += 1
-	}
-	result := make([]string, finalSize)
-	i := 0
-	for _, tok := range toks {
-		if tok == INTERNED_FIRST_TOKEN || tok == INTERNED_LAST_TOKEN {
-			continue
-		}
-		result[i] = internedStrings[tok]
-		i += 1
-	}
-	return result, toks[len(toks)-1] == INTERNED_LAST_TOKEN
+	return toks, alreadySeenMessages
 }
 
 // func findBestSplitPoint(_ SequenceMap, toks []int) int {
@@ -399,11 +374,12 @@ func getAndIncrementFromSeqmap(seqmap *SequenceMap, seq [SEQUENCE_SIZE]Token, to
 func startsWithPunctuation(str string) string {
 	for _, punct := range PUNCTUATIONS {
 		if strings.HasPrefix(str, punct) {
-			if len(str) <= len(punct) {
-				return punct
-			} else if isWhitespace(str[len(punct)]) != slices.Contains(PUNCT_BINDING_RIGHT[:], punct) {
-				return punct
-			}
+			// if len(str) <= len(punct) {
+			// 	return punct
+			// } else if isWhitespace(str[len(punct)]) != slices.Contains(PUNCT_BINDING_RIGHT[:], punct) {
+			// 	return punct
+			// }
+			return punct
 		}
 	}
 	return ""
@@ -421,10 +397,10 @@ func sequenceFromTokenSlice(slice []Token) [SEQUENCE_SIZE]Token {
 	return result
 }
 
-// func randomIntTempered(from int, to int, temp float64) int {
-// 	v := math.Pow(rand.Float64(), temp)
-// 	return from + int(v*float64(to-from))
-// }
+func randomIntTempered(from int, to int, temp float64) int {
+	v := math.Pow(rand.Float64(), temp)
+	return from + int(v*float64(to-from))
+}
 
 // func randomUintTempered(from uint, to uint, temp float64) uint {
 // 	v := math.Pow(rand.Float64(), temp)
@@ -433,4 +409,107 @@ func sequenceFromTokenSlice(slice []Token) [SEQUENCE_SIZE]Token {
 
 func isWhitespace(ch uint8) bool {
 	return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r'
+}
+
+func GenerateTokensFromSequenceMap2(seqmap SequenceMap, messages [][]Token, temp float64, beginning []Token, softLimit int) ([]Token, []int) {
+	result := []Token{INTERNED_FIRST_TOKEN}
+	messageCount := 1 + rand.IntN(2)
+	alreadySeenMessages := []int{}
+
+	if beginning != nil {
+		result = append(result, beginning...)
+	}
+
+	for result[len(result)-1] != INTERNED_LAST_TOKEN {
+		tail := result[max(len(result)-SEQUENCE_SIZE, 0):]
+		foundRelations := []WordRelations{}
+		allowLastToken := false
+
+		for len(tail) > 0 {
+			key := sequenceFromTokenSlice(tail)
+			if relation, ok := seqmap[key]; ok {
+				foundRelations = append(foundRelations, relation)
+				if _, ok := relation.Relations[INTERNED_LAST_TOKEN]; ok {
+					allowLastToken = true
+				}
+			}
+			tail = tail[1:]
+		}
+
+		if len(foundRelations) == 0 {
+			break
+		}
+		if softLimit != 0 && len(result)-1 >= softLimit && allowLastToken {
+			result = append(result, INTERNED_LAST_TOKEN)
+			break
+		}
+
+		relations := foundRelations[randomIntTempered(0, len(foundRelations), temp)]
+		// relations := foundRelations[0]
+		type TokenAmountPair struct {
+			Token  Token
+			Amount uint32
+		}
+		orderedRelations := make([]TokenAmountPair, 0, len(relations.Relations))
+		total := uint(0)
+		for tok, amount := range relations.Relations {
+			if tok == INTERNED_LAST_TOKEN && len(result)-1 < softLimit/2 && len(orderedRelations) > 1 {
+				continue
+			}
+			orderedRelations = append(orderedRelations, TokenAmountPair{Token: tok, Amount: amount})
+			total += uint(amount)
+		}
+		slices.SortFunc(orderedRelations, func(a TokenAmountPair, b TokenAmountPair) int {
+			if a.Amount > b.Amount {
+				return -1
+			}
+			if a.Amount < b.Amount {
+				return 1
+			}
+			return 0
+		})
+
+		mean := total / uint(len(orderedRelations))
+		maxIndex := 0
+		for i, v := range orderedRelations {
+			maxIndex = i
+			if uint(v.Amount) < mean {
+				break
+			}
+		}
+
+		relIndex := randomIntTempered(0, maxIndex, temp)
+		wantedNextToken := orderedRelations[relIndex].Token
+		if wantedNextToken == INTERNED_LAST_TOKEN {
+			result = append(result, INTERNED_LAST_TOKEN)
+			break
+		}
+
+		filtered := []int{}
+		for msgIndex, msg := range messages {
+			if slices.Contains(alreadySeenMessages, msgIndex) {
+				continue
+			}
+			if slices.Contains(msg, wantedNextToken) {
+				filtered = append(filtered, msgIndex)
+			}
+		}
+
+		msgIndex := filtered[rand.IntN(len(filtered))]
+		msg := messages[msgIndex]
+		alreadySeenMessages = append(alreadySeenMessages, msgIndex)
+		splited := msg[slices.Index(msg, wantedNextToken):]
+		if messageCount > 1 {
+			messageCount -= 1
+			if len(splited) > 1 {
+				splited = splited[:1+rand.IntN(len(splited)-1)]
+			}
+			result = append(result, splited...)
+		} else {
+			result = append(result, splited...)
+			result = append(result, INTERNED_LAST_TOKEN)
+		}
+	}
+
+	return result, alreadySeenMessages
 }

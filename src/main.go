@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"runtime/pprof"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,7 +21,10 @@ import (
 	mongodbOptions "go.mongodb.org/mongo-driver/mongo/options"
 )
 
-const DEFAULT_TEMP = 0.9
+const (
+	METHOD_DEFAULT = iota
+	METHOD_EXPERIMENT1
+)
 
 func main() {
 	profilerFile := flag.String("cpuprofile", "", "profile cpu usage")
@@ -198,24 +202,13 @@ func main() {
 			}
 
 			if messageCount >= minCount && minCount+rand.Int32N(maxCount-minCount) < messageCount {
-				var toks []string
-				var finishedOk bool
-				for tries := 0; tries < 5; tries += 1 {
-					toks, finishedOk = GenerateTokensFromMessages(guildContext.GlobalDict, guildContext.AllMessages, DEFAULT_TEMP, []Token{})
-					if !finishedOk {
-						continue
-					}
-					break
-				}
-				if finishedOk {
-					str := StringFromTokens(toks)
-					_, err := discord.ChannelMessageSendComplex(message.ChannelID, &discordgo.MessageSend{
-						Content:         str,
-						AllowedMentions: &discordgo.MessageAllowedMentions{},
-					})
-					CheckIrrelevantError(err)
-					perChannelMessageCounter[channelId] = 0
-				}
+				str := generateText(guildContext.GlobalDict, guildContext.AllMessages, 0, nil, METHOD_DEFAULT)
+				_, err := discord.ChannelMessageSendComplex(message.ChannelID, &discordgo.MessageSend{
+					Content:         str,
+					AllowedMentions: &discordgo.MessageAllowedMentions{},
+				})
+				CheckIrrelevantError(err)
+				perChannelMessageCounter[channelId] = 0
 			}
 		}
 	})
@@ -279,28 +272,24 @@ func main() {
 		options := interaction.ApplicationCommandData().Options
 		calleeUser := interaction.Interaction.Member.User
 
+		method := METHOD_DEFAULT
+		for _, option := range options {
+			if option.Name == "method" {
+				method = int(option.IntValue())
+			}
+		}
+
 		shouldSendSeparate := slices.Contains(usersExceptionsToDirectResponses, calleeUser.ID)
 		flags := discordgo.MessageFlagsEphemeral
 		if !shouldSendSeparate {
 			flags = 0
 		}
 
-		switch interaction.ApplicationCommandData().Name {
+		commandName := interaction.ApplicationCommandData().Name
+		switch commandName {
 		case "trigger":
 			{
-				var toks []string
-				var finishedOk bool
-				for tries := 0; tries < 5; tries += 1 {
-					toks, finishedOk = GenerateTokensFromMessages(guildContext.GlobalDict, guildContext.AllMessages, DEFAULT_TEMP, []Token{})
-					if !finishedOk {
-						continue
-					}
-					break
-				}
-				str := StringFromTokens(toks)
-				if !finishedOk {
-					str += " (...nn sei mais com oq completar)"
-				}
+				str := generateText(guildContext.GlobalDict, guildContext.AllMessages, 0, nil, method)
 
 				if shouldSendSeparate {
 					_, err = discord.ChannelMessageSendComplex(interaction.ChannelID, &discordgo.MessageSend{
@@ -332,19 +321,8 @@ func main() {
 					}
 				}
 
-				var toks []string
-				var finishedOk bool
-				for tries := 0; tries < 5; tries += 1 {
-					toks, finishedOk = GenerateTokensFromMessages(guildContext.GlobalDict, guildContext.AllMessages, DEFAULT_TEMP, startingToks)
-					if !finishedOk {
-						continue
-					}
-					break
-				}
-				str := StringFromTokens(toks)
-				if !finishedOk {
-					str += " (...nn sei mais com oq completar)"
-				}
+				str := generateText(guildContext.GlobalDict, guildContext.AllMessages, 0, startingToks, method)
+				// Info("generated:", str)
 
 				if shouldSendSeparate {
 					_, err = discord.ChannelMessageSendComplex(interaction.ChannelID, &discordgo.MessageSend{
@@ -417,19 +395,7 @@ func main() {
 					break
 				}
 
-				var toks []string
-				var finishedOk bool
-				for tries := 0; tries < 5; tries += 1 {
-					toks, finishedOk = GenerateTokensFromMessages(seqmap, messages, DEFAULT_TEMP, []Token{})
-					if !finishedOk {
-						continue
-					}
-					break
-				}
-				str := StringFromTokens(toks)
-				if !finishedOk {
-					str += " (...nn sei mais com oq completar)"
-				}
+				str := generateText(seqmap, messages, 0, nil, method)
 
 				if shouldSendSeparate {
 					_, err = discord.ChannelMessageSendComplex(interaction.ChannelID, &discordgo.MessageSend{
@@ -482,37 +448,6 @@ func main() {
 	Info("shutting down")
 }
 
-var commands = []*discordgo.ApplicationCommand{
-	{
-		Name:        "trigger",
-		Description: "vai me rodar",
-	},
-	{
-		Name:        "autocomplete",
-		Description: "me diz algo pra auto-completar",
-		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "text",
-				Description: "texto",
-				Required:    true,
-			},
-		},
-	},
-	{
-		Name:        "impersonate",
-		Description: "me diz alguém pra impersonar",
-		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:        discordgo.ApplicationCommandOptionUser,
-				Name:        "user",
-				Description: "usuário",
-				Required:    true,
-			},
-		},
-	},
-}
-
 type GuildContext struct {
 	GuildData   Guild
 	GlobalDict  SequenceMap
@@ -556,4 +491,127 @@ func updateGuildContexts() {
 	}
 
 	guildContexts = newGuildContexts
+}
+
+func generateText(seqmap SequenceMap, messages [][]Token, temp float64, beginning []Token, method int) string {
+	if temp == 0 {
+		if method == METHOD_DEFAULT {
+			temp = 0.9
+		} else if method == METHOD_EXPERIMENT1 {
+			temp = 0.01
+		}
+	}
+
+	var toks []Token
+	var messagesUsed []int
+	var finishedOk bool
+	for tries := 0; tries < 5; tries += 1 {
+		if method == METHOD_DEFAULT {
+			toks, messagesUsed = GenerateTokensFromMessages(seqmap, messages, temp, beginning)
+		} else if method == METHOD_EXPERIMENT1 {
+			toks, messagesUsed = GenerateTokensFromSequenceMap2(seqmap, messages, temp, beginning, 25)
+			finishedOk = toks[len(toks)-1] == INTERNED_LAST_TOKEN
+		}
+
+		if !finishedOk {
+			continue
+		}
+		break
+	}
+	str := StringFromTokens(toks)
+	if !finishedOk {
+		str += " (...nn sei mais com oq completar)"
+	}
+
+	if true {
+		Info("Messages used (" + strconv.Itoa(len(messagesUsed)) + ")")
+		for _, msgIndex := range messagesUsed {
+			msg := messages[msgIndex]
+			strs := make([]string, len(msg))
+			for i, tok := range msg {
+				strs[i] = internedStrings[tok]
+			}
+			Info("\t", strs)
+		}
+	}
+
+	return str
+}
+
+var commands = []*discordgo.ApplicationCommand{
+	{
+		Name:        "trigger",
+		Description: "vai me rodar",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionInteger,
+				Name:        "method",
+				Description: "método",
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{
+						Name:  "default",
+						Value: METHOD_DEFAULT,
+					},
+					{
+						Name:  "experiment1",
+						Value: METHOD_EXPERIMENT1,
+					},
+				},
+			},
+		},
+	},
+	{
+		Name:        "autocomplete",
+		Description: "me diz algo pra auto-completar",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "text",
+				Description: "texto",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionInteger,
+				Name:        "method",
+				Description: "método",
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{
+						Name:  "default",
+						Value: METHOD_DEFAULT,
+					},
+					{
+						Name:  "experiment1",
+						Value: METHOD_EXPERIMENT1,
+					},
+				},
+			},
+		},
+	},
+	{
+		Name:        "impersonate",
+		Description: "me diz alguém pra impersonar",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionUser,
+				Name:        "user",
+				Description: "usuário",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionInteger,
+				Name:        "method",
+				Description: "método",
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{
+						Name:  "default",
+						Value: METHOD_DEFAULT,
+					},
+					{
+						Name:  "experiment1",
+						Value: METHOD_EXPERIMENT1,
+					},
+				},
+			},
+		},
+	},
 }
