@@ -186,23 +186,62 @@ func main() {
 				CheckIrrelevantError(err)
 				return
 			}
-			if len(used.MessagesUsed) == 0 {
+			if len(used.GlobalMessagesUsed) > 0 {
+				str := "Mensagens usadas (" + strconv.Itoa(len(used.GlobalMessagesUsed)) + ")"
+				for _, msgIndex := range used.GlobalMessagesUsed {
+					msg := guildContext.AllMessages[msgIndex]
+					str += "\n> " + StringFromTokens(msg) + "\n"
+				}
+				_, err := discord.ChannelMessageSendComplex(message.ChannelID, &discordgo.MessageSend{
+					Content:         str,
+					AllowedMentions: &discordgo.MessageAllowedMentions{},
+					Reference:       message.Reference(),
+				})
+				CheckIrrelevantError(err)
+			} else if len(used.UserMessagesUsed) > 0 {
+				// NOTE: go func so that the lock is released
+				go func() {
+					cursor, err := MessageCollection.Find(context.Background(), bson.M{
+						"_id": bson.M{
+							"$in": used.UserMessagesUsed,
+						},
+					}, mongodbOptions.Find().SetProjection(bson.M{
+						"Content": 1,
+					}))
+					if err != nil {
+						_, err := discord.ChannelMessageSendReply(message.ChannelID, "deu pau pra conferir o banco", message.Reference())
+						CheckIrrelevantError(err)
+					}
+
+					ch := make(chan []Message)
+					go ConsumeCursorToChannel(cursor, ch)
+					messages := []Message{}
+					for batch := range ch {
+						messages = append(messages, batch...)
+					}
+
+					slices.SortFunc(messages, func(a Message, b Message) int {
+						left := slices.Index(used.UserMessagesUsed, a.Id)
+						right := slices.Index(used.UserMessagesUsed, b.Id)
+
+						return left - right
+					})
+
+					str := "Mensagens usadas (" + strconv.Itoa(len(messages)) + ")"
+					for _, msg := range messages {
+						str += "\n> " + msg.Content + "\n"
+					}
+					_, err = discord.ChannelMessageSendComplex(message.ChannelID, &discordgo.MessageSend{
+						Content:         str,
+						AllowedMentions: &discordgo.MessageAllowedMentions{},
+						Reference:       message.Reference(),
+					})
+					CheckIrrelevantError(err)
+				}()
+			} else {
 				_, err := discord.ChannelMessageSendReply(message.ChannelID, "isso ai eu tirei do cu msm", message.Reference())
 				CheckIrrelevantError(err)
-				return
 			}
-
-			str := "Mensagens usadas (" + strconv.Itoa(len(used.MessagesUsed)) + ")"
-			for _, msgIndex := range used.MessagesUsed {
-				msg := guildContext.AllMessages[msgIndex]
-				str += "\n> " + StringFromTokens(msg) + "\n"
-			}
-			_, err := discord.ChannelMessageSendComplex(message.ChannelID, &discordgo.MessageSend{
-				Content:         str,
-				AllowedMentions: &discordgo.MessageAllowedMentions{},
-				Reference:       message.Reference(),
-			})
-			CheckIrrelevantError(err)
 
 			return
 		}
@@ -359,8 +398,8 @@ func main() {
 				})
 				if err == nil {
 					insertMessagesUsedEntry(MessagesUsedEntry{
-						ID:           SnowflakeToUint64(msg.ID),
-						MessagesUsed: messagesUsed,
+						ID:                 SnowflakeToUint64(msg.ID),
+						GlobalMessagesUsed: messagesUsed,
 					})
 				}
 				CheckIrrelevantError(err)
@@ -405,8 +444,8 @@ func main() {
 				CheckIrrelevantError(err)
 				if err == nil {
 					insertMessagesUsedEntry(MessagesUsedEntry{
-						ID:           SnowflakeToUint64(msg.ID),
-						MessagesUsed: messagesUsed,
+						ID:                 SnowflakeToUint64(msg.ID),
+						GlobalMessagesUsed: messagesUsed,
 					})
 				}
 				break
@@ -431,7 +470,7 @@ func main() {
 						"GuildId":  guildId,
 						"AuthorId": SnowflakeToUint64(user.ID),
 					},
-					mongodbOptions.Find().SetProjection(bson.M{"_id": 0, "Content": 1}).SetBatchSize(16<<20))
+					mongodbOptions.Find().SetProjection(bson.M{"Content": 1}).SetBatchSize(16<<20))
 				if err != nil {
 					Error("error when querying user messages:", err)
 					_, err = discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
@@ -446,12 +485,14 @@ func main() {
 				go ConsumeCursorToChannel(cursor, batchChannel)
 				seqmap := make(SequenceMap)
 				messages := make([][]Token, 0)
+				messagesIds := make([]primitive.ObjectID, 0)
 
 				for batch := range batchChannel {
 					for _, msg := range batch {
 						var toks []Token
 						ConsumeMessage(&seqmap, msg.Content, &toks)
 						messages = append(messages, toks)
+						messagesIds = append(messagesIds, msg.Id)
 					}
 				}
 
@@ -480,9 +521,14 @@ func main() {
 				})
 				CheckIrrelevantError(err)
 				if err == nil {
+					actualMessagesUsed := make([]primitive.ObjectID, len(messagesUsed))
+					for i, msgIndex := range messagesUsed {
+						actualMessagesUsed[i] = messagesIds[msgIndex]
+					}
+
 					insertMessagesUsedEntry(MessagesUsedEntry{
-						ID:           SnowflakeToUint64(msg.ID),
-						MessagesUsed: messagesUsed,
+						ID:               SnowflakeToUint64(msg.ID),
+						UserMessagesUsed: actualMessagesUsed,
 					})
 				}
 			}
@@ -524,8 +570,9 @@ func main() {
 }
 
 type MessagesUsedEntry struct {
-	ID           uint64
-	MessagesUsed []int
+	ID                 uint64
+	GlobalMessagesUsed []int
+	UserMessagesUsed   []primitive.ObjectID
 }
 
 var messagesUsedEntries = []MessagesUsedEntry{}
