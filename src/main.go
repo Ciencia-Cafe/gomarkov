@@ -197,7 +197,11 @@ func main() {
 				msg := guildContext.AllMessages[msgIndex]
 				str += "\n> " + StringFromTokens(msg) + "\n"
 			}
-			_, err := discord.ChannelMessageSendReply(message.ChannelID, str, message.Reference())
+			_, err := discord.ChannelMessageSendComplex(message.ChannelID, &discordgo.MessageSend{
+				Content:         str,
+				AllowedMentions: &discordgo.MessageAllowedMentions{},
+				Reference:       message.Reference(),
+			})
 			CheckIrrelevantError(err)
 
 			return
