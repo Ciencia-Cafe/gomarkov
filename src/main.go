@@ -182,8 +182,25 @@ func main() {
 			}
 			messagesUsedEntriesLock.Unlock()
 			if used.ID == 0 {
-				_, err := discord.ChannelMessageSendReply(message.ChannelID, "esqueci", message.Reference())
-				CheckIrrelevantError(err)
+				str := "esqueci"
+				options := [...]string{
+					"explicar esse tapa q vou dar na sua cara",
+					"cabecao",
+				}
+				if strings.HasPrefix(message.ReferencedMessage.Content, "Mensagens usadas (") ||
+					slices.Contains(options[:], message.ReferencedMessage.Content) ||
+					message.ReferencedMessage.Content == "vish..." ||
+					message.ReferencedMessage.Content == "isso ai eu tirei do cu msm" {
+					str = ""
+					if rand.IntN(100) < 5 {
+						str = options[rand.IntN(len(options))]
+					}
+				}
+
+				if str != "" {
+					_, err := discord.ChannelMessageSendReply(message.ChannelID, str, message.Reference())
+					CheckIrrelevantError(err)
+				}
 				return
 			}
 			if len(used.GlobalMessagesUsed) > 0 {
