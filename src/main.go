@@ -162,6 +162,47 @@ func main() {
 			guildContexts[guildContext.GuildData.GuildId] = guildContext
 		}()
 
+		if message.ReferencedMessage != nil &&
+			message.ReferencedMessage.Author != nil &&
+			message.ReferencedMessage.Author.ID == discord.State.User.ID &&
+			slices.Contains([]string{"explique", "explain"}, message.Content) {
+			searchId := SnowflakeToUint64(message.ReferencedMessage.ID)
+			if searchId == 0 {
+				_, err := discord.ChannelMessageSendReply(message.ChannelID, "vish...", message.Reference())
+				CheckIrrelevantError(err)
+				return
+			}
+			messagesUsedEntriesLock.Lock()
+			var used MessagesUsedEntry
+			for _, value := range messagesUsedEntries {
+				if value.ID == searchId {
+					used = value
+					break
+				}
+			}
+			messagesUsedEntriesLock.Unlock()
+			if used.ID == 0 {
+				_, err := discord.ChannelMessageSendReply(message.ChannelID, "esqueci", message.Reference())
+				CheckIrrelevantError(err)
+				return
+			}
+			if len(used.MessagesUsed) == 0 {
+				_, err := discord.ChannelMessageSendReply(message.ChannelID, "isso ai eu tirei do cu msm", message.Reference())
+				CheckIrrelevantError(err)
+				return
+			}
+
+			str := "Mensagens usadas (" + strconv.Itoa(len(used.MessagesUsed)) + ")"
+			for _, msgIndex := range used.MessagesUsed {
+				msg := guildContext.AllMessages[msgIndex]
+				str += "\n> " + StringFromTokens(msg) + "\n"
+			}
+			_, err := discord.ChannelMessageSendReply(message.ChannelID, str, message.Reference())
+			CheckIrrelevantError(err)
+
+			return
+		}
+
 		if slices.Contains(guildContext.GuildData.ScrapingChannelsIds, channelId) {
 			timestamp, err := discordgo.SnowflakeTimestamp(message.ID)
 			if err != nil {
@@ -202,7 +243,7 @@ func main() {
 			}
 
 			if messageCount >= minCount && minCount+rand.Int32N(maxCount-minCount) < messageCount {
-				str := generateText(guildContext.GlobalDict, guildContext.AllMessages, 0, nil, METHOD_DEFAULT)
+				str, _ := generateText(guildContext.GlobalDict, guildContext.AllMessages, 0, nil, METHOD_DEFAULT)
 				_, err := discord.ChannelMessageSendComplex(message.ChannelID, &discordgo.MessageSend{
 					Content:         str,
 					AllowedMentions: &discordgo.MessageAllowedMentions{},
@@ -289,7 +330,16 @@ func main() {
 		switch commandName {
 		case "trigger":
 			{
-				str := generateText(guildContext.GlobalDict, guildContext.AllMessages, 0, nil, method)
+				err := discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						AllowedMentions: &discordgo.MessageAllowedMentions{},
+						Flags:           flags,
+					},
+				})
+				CheckIrrelevantError(err)
+
+				str, messagesUsed := generateText(guildContext.GlobalDict, guildContext.AllMessages, 0, nil, method)
 
 				if shouldSendSeparate {
 					_, err = discord.ChannelMessageSendComplex(interaction.ChannelID, &discordgo.MessageSend{
@@ -298,14 +348,17 @@ func main() {
 					})
 					CheckIrrelevantError(err)
 				}
-				err = discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
-					Type: discordgo.InteractionResponseChannelMessageWithSource,
-					Data: &discordgo.InteractionResponseData{
-						Content:         str + "\n-# " + calleeUser.GlobalName + " usou /trigger",
-						AllowedMentions: &discordgo.MessageAllowedMentions{},
-						Flags:           flags,
-					},
+				msg, err := discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+					Content:         str + "\n-# " + calleeUser.GlobalName + " usou /trigger",
+					AllowedMentions: &discordgo.MessageAllowedMentions{},
+					Flags:           flags,
 				})
+				if err == nil {
+					insertMessagesUsedEntry(MessagesUsedEntry{
+						ID:           SnowflakeToUint64(msg.ID),
+						MessagesUsed: messagesUsed,
+					})
+				}
 				CheckIrrelevantError(err)
 				break
 			}
@@ -321,7 +374,16 @@ func main() {
 					}
 				}
 
-				str := generateText(guildContext.GlobalDict, guildContext.AllMessages, 0, startingToks, method)
+				err := discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						AllowedMentions: &discordgo.MessageAllowedMentions{},
+						Flags:           flags,
+					},
+				})
+				CheckIrrelevantError(err)
+
+				str, messagesUsed := generateText(guildContext.GlobalDict, guildContext.AllMessages, 0, startingToks, method)
 				// Info("generated:", str)
 
 				if shouldSendSeparate {
@@ -331,15 +393,18 @@ func main() {
 					})
 					CheckIrrelevantError(err)
 				}
-				err = discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
-					Type: discordgo.InteractionResponseChannelMessageWithSource,
-					Data: &discordgo.InteractionResponseData{
-						Content:         str,
-						AllowedMentions: &discordgo.MessageAllowedMentions{},
-						Flags:           flags,
-					},
+				msg, err := discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+					Content:         str,
+					AllowedMentions: &discordgo.MessageAllowedMentions{},
+					Flags:           flags,
 				})
 				CheckIrrelevantError(err)
+				if err == nil {
+					insertMessagesUsedEntry(MessagesUsedEntry{
+						ID:           SnowflakeToUint64(msg.ID),
+						MessagesUsed: messagesUsed,
+					})
+				}
 				break
 			}
 		case "impersonate":
@@ -395,7 +460,7 @@ func main() {
 					break
 				}
 
-				str := generateText(seqmap, messages, 0, nil, method)
+				str, messagesUsed := generateText(seqmap, messages, 0, nil, method)
 
 				if shouldSendSeparate {
 					_, err = discord.ChannelMessageSendComplex(interaction.ChannelID, &discordgo.MessageSend{
@@ -404,12 +469,18 @@ func main() {
 					})
 					CheckIrrelevantError(err)
 				}
-				_, err = discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
+				msg, err := discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
 					Content:         str + "\n-# impersonating " + user.GlobalName,
 					AllowedMentions: &discordgo.MessageAllowedMentions{},
 					Flags:           flags,
 				})
 				CheckIrrelevantError(err)
+				if err == nil {
+					insertMessagesUsedEntry(MessagesUsedEntry{
+						ID:           SnowflakeToUint64(msg.ID),
+						MessagesUsed: messagesUsed,
+					})
+				}
 			}
 		}
 	})
@@ -446,6 +517,31 @@ func main() {
 	// }
 	<-signalChannel
 	Info("shutting down")
+}
+
+type MessagesUsedEntry struct {
+	ID           uint64
+	MessagesUsed []int
+}
+
+var messagesUsedEntries = []MessagesUsedEntry{}
+var messagesUsedEntriesLock = sync.RWMutex{}
+
+func insertMessagesUsedEntry(entry MessagesUsedEntry) {
+	if entry.ID == 0 {
+		Error("trying to insert entry with ID 0:", entry)
+		return
+	}
+
+	messagesUsedEntriesLock.Lock()
+	defer messagesUsedEntriesLock.Unlock()
+
+	const LIMIT = 1000
+	if len(messagesUsedEntries) > LIMIT+1 {
+		messagesUsedEntries = messagesUsedEntries[len(messagesUsedEntries)-LIMIT:]
+	}
+
+	messagesUsedEntries = append(messagesUsedEntries, entry)
 }
 
 type GuildContext struct {
@@ -493,7 +589,7 @@ func updateGuildContexts() {
 	guildContexts = newGuildContexts
 }
 
-func generateText(seqmap SequenceMap, messages [][]Token, temp float64, beginning []Token, method int) string {
+func generateText(seqmap SequenceMap, messages [][]Token, temp float64, beginning []Token, method int) (string, []int) {
 	if temp == 0 {
 		if method == METHOD_DEFAULT {
 			temp = 0.9
@@ -510,8 +606,8 @@ func generateText(seqmap SequenceMap, messages [][]Token, temp float64, beginnin
 			toks, messagesUsed = GenerateTokensFromMessages(seqmap, messages, temp, beginning)
 		} else if method == METHOD_EXPERIMENT1 {
 			toks, messagesUsed = GenerateTokensFromSequenceMap2(seqmap, messages, temp, beginning, 25)
-			finishedOk = toks[len(toks)-1] == INTERNED_LAST_TOKEN
 		}
+		finishedOk = toks[len(toks)-1] == INTERNED_LAST_TOKEN
 
 		if !finishedOk {
 			continue
@@ -535,10 +631,14 @@ func generateText(seqmap SequenceMap, messages [][]Token, temp float64, beginnin
 		}
 	}
 
-	return str
+	return str, messagesUsed
 }
 
 var commands = []*discordgo.ApplicationCommand{
+	{
+		Name:        "explain",
+		Description: "mostra as msgs q usei pra fazer um texto",
+	},
 	{
 		Name:        "trigger",
 		Description: "vai me rodar",

@@ -29,6 +29,7 @@ const INTERNED_LAST_TOKEN = 2
 var PUNCTUATIONS = [...]string{
 	":",
 	// ";",
+	"\"",
 	"...",
 	"..",
 	".",
@@ -50,6 +51,10 @@ var PUNCTUATIONS = [...]string{
 
 var PUNCT_BINDING_RIGHT = [...]string{
 	"(",
+}
+
+var PUNCT_BINDING_BOTH = [...]string{
+	"\"",
 }
 
 var internedStrings []string
@@ -177,6 +182,7 @@ outerLoop:
 func StringFromTokens(toks []Token) string {
 	result := ""
 	shouldAddSpace := false
+	punctBothSet := map[string]bool{}
 
 	for _, tok := range toks {
 		if tok == INTERNED_FIRST_TOKEN || tok == INTERNED_LAST_TOKEN {
@@ -191,6 +197,19 @@ func StringFromTokens(toks []Token) string {
 					shouldAddSpace = false
 				}
 				result += strtok
+			} else if slices.Contains(PUNCT_BINDING_BOTH[:], strtok) {
+				if punctBothSet[strtok] {
+					result += strtok
+					shouldAddSpace = true
+					punctBothSet[strtok] = false
+				} else {
+					if shouldAddSpace {
+						result += " "
+						shouldAddSpace = false
+					}
+					result += strtok
+					punctBothSet[strtok] = true
+				}
 			} else {
 				result += strtok
 				shouldAddSpace = true
