@@ -19,8 +19,8 @@ type WordRelations struct {
 
 type SequenceMap map[[SEQUENCE_SIZE]Token]WordRelations
 
-const SEQUENCE_SIZE = 5
-const MIN_SEQUENCE_SIZE = 2
+const SEQUENCE_SIZE = 6
+const MIN_SEQUENCE_SIZE = 1
 const FIRST_TOKEN = "(first token)"
 const LAST_TOKEN = "(last token)"
 const INTERNED_FIRST_TOKEN = 1
@@ -340,7 +340,7 @@ func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]Token, temp float64
 func findBestSplitPoint2(seqmap SequenceMap, toks []Token) int {
 	bestSplitIndex := -1
 	bestScore := uint(0)
-	for i := range toks {
+	for i := len(toks) - 1; i >= 0; i -= 1 {
 		tail := toks[max(i-SEQUENCE_SIZE, 0):i]
 		for ; len(tail) > 0; tail = tail[1:] {
 			key := sequenceFromTokenSlice(tail)
@@ -357,7 +357,7 @@ func findBestSplitPoint2(seqmap SequenceMap, toks []Token) int {
 					score = 0
 				}
 
-				if score >= bestScore {
+				if score > bestScore {
 					bestScore = score
 					bestSplitIndex = i + 1
 				}

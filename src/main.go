@@ -2,10 +2,11 @@ package main
 
 import (
 	"context"
+	"flag"
 	"math/rand/v2"
 	"os"
 	"os/signal"
-	"runtime/debug"
+	"runtime/pprof"
 	"slices"
 	"strings"
 	"sync"
@@ -22,7 +23,20 @@ import (
 const DEFAULT_TEMP = 0.9
 
 func main() {
-	debug.SetMemoryLimit(512 << 20)
+	profilerFile := flag.String("cpuprofile", "", "profile cpu usage")
+	flag.Parse()
+
+	// debug.SetMemoryLimit(512 << 20)
+
+	if *profilerFile != "" {
+		file, err := os.Create(*profilerFile)
+		if err != nil {
+			Error("failed to create file specified in -cpuprofile flag:", err)
+		} else {
+			pprof.StartCPUProfile(file)
+			defer pprof.StopCPUProfile()
+		}
+	}
 
 	// ========================================================
 	// .env init
@@ -143,28 +157,27 @@ func main() {
 		defer func() {
 			guildContexts[guildContext.GuildData.GuildId] = guildContext
 		}()
-		if !slices.Contains(guildContext.GuildData.ScrapingChannelsIds, channelId) {
-			return
-		}
 
-		timestamp, err := discordgo.SnowflakeTimestamp(message.ID)
-		if err != nil {
-			Warn("failed to get timestamp from snowflake, defaulting to time.Now()")
-			timestamp = time.Now()
-		}
+		if slices.Contains(guildContext.GuildData.ScrapingChannelsIds, channelId) {
+			timestamp, err := discordgo.SnowflakeTimestamp(message.ID)
+			if err != nil {
+				Warn("failed to get timestamp from snowflake, defaulting to time.Now()")
+				timestamp = time.Now()
+			}
 
-		Info("msg:", message.Content)
-		var toks []Token
-		ConsumeMessage(&guildContext.GlobalDict, message.Content, &toks)
-		guildContext.AllMessages = append(guildContext.AllMessages, toks)
-		_, err = MessageCollection.InsertOne(context.Background(), Message{
-			CreatedAt: primitive.NewDateTimeFromTime(timestamp),
-			GuildId:   guildId,
-			ChannelId: channelId,
-			AuthorId:  userId,
-			Content:   message.Content,
-		})
-		CheckIrrelevantError(err)
+			Info("msg:", message.Content)
+			var toks []Token
+			ConsumeMessage(&guildContext.GlobalDict, message.Content, &toks)
+			guildContext.AllMessages = append(guildContext.AllMessages, toks)
+			_, err = MessageCollection.InsertOne(context.Background(), Message{
+				CreatedAt: primitive.NewDateTimeFromTime(timestamp),
+				GuildId:   guildId,
+				ChannelId: channelId,
+				AuthorId:  userId,
+				Content:   message.Content,
+			})
+			CheckIrrelevantError(err)
+		}
 
 		if slices.Contains(guildContext.GuildData.InteractionChannelsIds, channelId) {
 			var messageCount int32
@@ -362,9 +375,6 @@ func main() {
 
 				err = discord.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
 					Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-					Data: &discordgo.InteractionResponseData{
-						Flags: flags,
-					},
 				})
 				CheckIrrelevantError(err)
 
@@ -376,8 +386,10 @@ func main() {
 					},
 					mongodbOptions.Find().SetProjection(bson.M{"_id": 0, "Content": 1}).SetBatchSize(16<<20))
 				if err != nil {
+					Error("error when querying user messages:", err)
 					_, err = discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
-						Content: "(erro) deu pau �",
+						Content: "deu pau �",
+						Flags:   discordgo.MessageFlagsEphemeral,
 					})
 					CheckIrrelevantError(err)
 					break
@@ -396,9 +408,10 @@ func main() {
 					}
 				}
 
-				if len(messages) <= 30 {
+				if len(messages) <= 50 {
 					_, err = discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
 						Content: "(erro) tenho mts poucas msgs dessa pessoa",
+						Flags:   discordgo.MessageFlagsEphemeral,
 					})
 					CheckIrrelevantError(err)
 					break
@@ -436,7 +449,7 @@ func main() {
 	})
 
 	signalChannel := make(chan os.Signal, 1)
-	signal.Notify(signalChannel, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	signal.Notify(signalChannel, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGABRT, syscall.SIGINT)
 
 	err = discord.Open()
 	if err != nil {
