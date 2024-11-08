@@ -131,7 +131,6 @@ func main() {
 
 	// ========================================================
 	// Discord
-	usersExceptionsToDirectResponses := strings.Split(os.Getenv("DISCORD_USERS_EXCEPTIONS_TO_DIRECT_RESPONSES"), ",")
 	discord, err := discordgo.New("Bot " + os.Getenv("DISCORD_TOKEN"))
 	if err != nil {
 		Error("error when connecting to discord: ", err)
@@ -165,7 +164,7 @@ func main() {
 		if message.ReferencedMessage != nil &&
 			message.ReferencedMessage.Author != nil &&
 			message.ReferencedMessage.Author.ID == discord.State.User.ID &&
-			slices.Contains([]string{"explique", "explain"}, message.Content) {
+			slices.Contains([]string{"explique", "explain"}, strings.ToLower(message.Content)) {
 			searchId := SnowflakeToUint64(message.ReferencedMessage.ID)
 			if searchId == 0 {
 				_, err := discord.ChannelMessageSendReply(message.ChannelID, "vish...", message.Reference())
@@ -192,7 +191,7 @@ func main() {
 					message.ReferencedMessage.Content == "vish..." ||
 					message.ReferencedMessage.Content == "isso ai eu tirei do cu msm" {
 					str = ""
-					if rand.IntN(100) < 5 {
+					if rand.IntN(100) < 10 {
 						str = options[rand.IntN(len(options))]
 					}
 				}
@@ -303,12 +302,18 @@ func main() {
 			}
 
 			if messageCount >= minCount && minCount+rand.Int32N(maxCount-minCount) < messageCount {
-				str, _ := generateText(guildContext.GlobalDict, guildContext.AllMessages, 0, nil, METHOD_DEFAULT)
-				_, err := discord.ChannelMessageSendComplex(message.ChannelID, &discordgo.MessageSend{
+				str, messagesUsed := generateText(guildContext.GlobalDict, guildContext.AllMessages, 0, nil, METHOD_DEFAULT)
+				msg, err := discord.ChannelMessageSendComplex(message.ChannelID, &discordgo.MessageSend{
 					Content:         str,
 					AllowedMentions: &discordgo.MessageAllowedMentions{},
 				})
 				CheckIrrelevantError(err)
+				if err == nil {
+					insertMessagesUsedEntry(MessagesUsedEntry{
+						ID:                 SnowflakeToUint64(msg.ID),
+						GlobalMessagesUsed: messagesUsed,
+					})
+				}
 				perChannelMessageCounter[channelId] = 0
 			}
 		}
@@ -380,12 +385,6 @@ func main() {
 			}
 		}
 
-		shouldSendSeparate := slices.Contains(usersExceptionsToDirectResponses, calleeUser.ID)
-		flags := discordgo.MessageFlagsEphemeral
-		if !shouldSendSeparate {
-			flags = 0
-		}
-
 		commandName := interaction.ApplicationCommandData().Name
 		switch commandName {
 		case "trigger":
@@ -394,24 +393,15 @@ func main() {
 					Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 					Data: &discordgo.InteractionResponseData{
 						AllowedMentions: &discordgo.MessageAllowedMentions{},
-						Flags:           flags,
 					},
 				})
 				CheckIrrelevantError(err)
 
 				str, messagesUsed := generateText(guildContext.GlobalDict, guildContext.AllMessages, 0, nil, method)
 
-				if shouldSendSeparate {
-					_, err = discord.ChannelMessageSendComplex(interaction.ChannelID, &discordgo.MessageSend{
-						Content:         str,
-						AllowedMentions: &discordgo.MessageAllowedMentions{},
-					})
-					CheckIrrelevantError(err)
-				}
 				msg, err := discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
 					Content:         str + "\n-# " + calleeUser.GlobalName + " usou /trigger",
 					AllowedMentions: &discordgo.MessageAllowedMentions{},
-					Flags:           flags,
 				})
 				if err == nil {
 					insertMessagesUsedEntry(MessagesUsedEntry{
@@ -425,12 +415,10 @@ func main() {
 		case "autocomplete":
 			{
 				var startingToks []Token
-				optionRawValue := ""
 				for _, option := range options {
 					if option.Name == "text" {
 						str := option.StringValue()
 						startingToks = TokenizeString(str, nil, false)
-						optionRawValue = str
 					}
 				}
 
@@ -438,7 +426,6 @@ func main() {
 					Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 					Data: &discordgo.InteractionResponseData{
 						AllowedMentions: &discordgo.MessageAllowedMentions{},
-						Flags:           flags,
 					},
 				})
 				CheckIrrelevantError(err)
@@ -446,17 +433,9 @@ func main() {
 				str, messagesUsed := generateText(guildContext.GlobalDict, guildContext.AllMessages, 0, startingToks, method)
 				// Info("generated:", str)
 
-				if shouldSendSeparate {
-					_, err = discord.ChannelMessageSendComplex(interaction.ChannelID, &discordgo.MessageSend{
-						Content:         str + "\n-# " + calleeUser.GlobalName + " usou /autocomplete " + optionRawValue,
-						AllowedMentions: &discordgo.MessageAllowedMentions{},
-					})
-					CheckIrrelevantError(err)
-				}
 				msg, err := discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
 					Content:         str,
 					AllowedMentions: &discordgo.MessageAllowedMentions{},
-					Flags:           flags,
 				})
 				CheckIrrelevantError(err)
 				if err == nil {
@@ -524,17 +503,9 @@ func main() {
 
 				str, messagesUsed := generateText(seqmap, messages, 0, nil, method)
 
-				if shouldSendSeparate {
-					_, err = discord.ChannelMessageSendComplex(interaction.ChannelID, &discordgo.MessageSend{
-						Content:         str + "\n-# " + calleeUser.GlobalName + " usou /impersonate " + user.Mention(),
-						AllowedMentions: &discordgo.MessageAllowedMentions{},
-					})
-					CheckIrrelevantError(err)
-				}
 				msg, err := discord.FollowupMessageCreate(interaction.Interaction, true, &discordgo.WebhookParams{
 					Content:         str + "\n-# impersonating " + user.GlobalName,
 					AllowedMentions: &discordgo.MessageAllowedMentions{},
-					Flags:           flags,
 				})
 				CheckIrrelevantError(err)
 				if err == nil {
@@ -582,6 +553,7 @@ func main() {
 	// } else {
 	// 	Warn(err)
 	// }
+
 	<-signalChannel
 	Info("shutting down")
 }
