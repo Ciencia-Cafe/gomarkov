@@ -227,7 +227,7 @@ func StringFromTokens(toks []Token) string {
 }
 
 func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]Token, temp float64, beginning []Token) ([]Token, []int) {
-	maxMessageCount := 1 + rand.IntN(2)
+	maxMessageCount := 2 + rand.IntN(1)
 	alreadySeenMessages := make([]int, 0, maxMessageCount+1)
 
 	var toks []Token
@@ -238,6 +238,7 @@ func GenerateTokensFromMessages(seqmap SequenceMap, msgs [][]Token, temp float64
 			toks[1+i] = tok
 		}
 	} else {
+		maxMessageCount -= 1
 		index := rand.IntN(len(msgs))
 		msg := msgs[index]
 		alreadySeenMessages = append(alreadySeenMessages, index)
