@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type Token uint32
@@ -59,6 +60,7 @@ var PUNCT_BINDING_BOTH = [...]string{
 
 var internedStrings []string
 var internedStringsMap map[string]Token
+var internedStringsMapLock sync.RWMutex
 
 func init() {
 	internedStrings = make([]string, 3, 200_000)
@@ -72,18 +74,25 @@ func init() {
 }
 
 func internString(str string) Token {
-	if id, ok := internedStringsMap[str]; ok {
+	internedStringsMapLock.RLock()
+	id, ok := internedStringsMap[str]
+	internedStringsMapLock.RUnlock()
+	if ok {
 		return id
 	}
 
+	internedStringsMapLock.Lock()
+	defer internedStringsMapLock.Unlock()
+
 	str = strings.Clone(str)
-	id := len(internedStrings)
-	if id > MAX_TOKEN {
+	id2 := len(internedStrings)
+	if id2 > MAX_TOKEN {
 		panic("interned strings map size would grow beyond MAX_TOKEN (" + strconv.Itoa(MAX_TOKEN) + ")")
 	}
+	id = Token(id2)
 	internedStrings = append(internedStrings, str)
-	internedStringsMap[str] = Token(id)
-	return Token(id)
+	internedStringsMap[str] = id
+	return id
 }
 
 func ConsumeMessage(sequenceMap *SequenceMap, text string, outToks *[]Token) {
