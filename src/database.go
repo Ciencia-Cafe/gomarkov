@@ -106,6 +106,7 @@ func ConsumeCursorToChannel[T any](cursor *mongo.Cursor, ch chan []T) {
 
 	if err := cursor.Close(ctx); err != nil {
 		Error("failed to close cursor after consuming it:", err)
+		panic("fatal")
 	}
 	close(ch)
 }

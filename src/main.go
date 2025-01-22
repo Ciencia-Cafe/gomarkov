@@ -269,7 +269,7 @@ func main() {
 				timestamp = time.Now()
 			}
 
-			Info("msg:", message.Content)
+			// Info("msg:", message.Content)
 			var toks []Token
 			ConsumeMessage(&guildContext.GlobalDict, message.Content, &toks)
 			guildContext.AllMessages = append(guildContext.AllMessages, toks)
